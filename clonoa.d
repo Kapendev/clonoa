@@ -4,62 +4,62 @@
 
 // NOTE: Add library-specific symbols here.
 string defaultSymbolHeader = ``;
+string[] defaultFunctionSkipList = [];
 
 string[string] defaultTypeMap = [
     // --- NOTE: Add library-specific type replacements here.
-    "rAudioBuffer*"    : "void*",
-    "rAudioProcessor*" : "void*",
+    // "currentName" : "newName",
     // ---
 
-    "__int8_t"         : "byte",
-    "__int16_t"        : "short",
-    "__int32_t"        : "int",
-    "__int64_t"        : "long",
-    "__uint8_t"        : "ubyte",
-    "__uint16_t"       : "ushort",
-    "__uint32_t"       : "uint",
-    "__uint64_t"       : "ulong",
-    "int8_t"           : "byte",
-    "int16_t"          : "short",
-    "int32_t"          : "int",
-    "int64_t"          : "long",
-    "uint8_t"          : "ubyte",
-    "uint16_t"         : "ushort",
-    "uint32_t"         : "uint",
-    "uint64_t"         : "ulong",
-    "__byte"           : "byte",
-    "__short"          : "short",
-    "__int"            : "int",
-    "__long"           : "long",
-    "__ubyte"          : "ubyte",
-    "__ushort"         : "ushort",
-    "__uint"           : "uint",
-    "__ulong"          : "ulong",
+    "__int8_t"       : "byte",
+    "__int16_t"      : "short",
+    "__int32_t"      : "int",
+    "__int64_t"      : "long",
+    "__uint8_t"      : "ubyte",
+    "__uint16_t"     : "ushort",
+    "__uint32_t"     : "uint",
+    "__uint64_t"     : "ulong",
+    "int8_t"         : "byte",
+    "int16_t"        : "short",
+    "int32_t"        : "int",
+    "int64_t"        : "long",
+    "uint8_t"        : "ubyte",
+    "uint16_t"       : "ushort",
+    "uint32_t"       : "uint",
+    "uint64_t"       : "ulong",
+    "__byte"         : "byte",
+    "__short"        : "short",
+    "__int"          : "int",
+    "__long"         : "long",
+    "__ubyte"        : "ubyte",
+    "__ushort"       : "ushort",
+    "__uint"         : "uint",
+    "__ulong"        : "ulong",
 
-    "int_least8_t"     : "byte",
-    "int_least16_t"    : "short",
-    "int_least32_t"    : "int",
-    "int_least64_t"    : "long",
-    "uint_least8_t"    : "ubyte",
-    "uint_least16_t"   : "ushort",
-    "uint_least32_t"   : "uint",
-    "uint_least64_t"   : "ulong",
+    "int_least8_t"   : "byte",
+    "int_least16_t"  : "short",
+    "int_least32_t"  : "int",
+    "int_least64_t"  : "long",
+    "uint_least8_t"  : "ubyte",
+    "uint_least16_t" : "ushort",
+    "uint_least32_t" : "uint",
+    "uint_least64_t" : "ulong",
 
-    "int_fast8_t"      : "byte",
-    "int_fast16_t"     : "long",
-    "int_fast32_t"     : "long",
-    "int_fast64_t"     : "long",
-    "uint_fast8_t"     : "ubyte",
-    "uint_fast16_t"    : "ulong",
-    "uint_fast32_t"    : "ulong",
-    "uint_fast64_t"    : "ulong",
+    "int_fast8_t"    : "byte",
+    "int_fast16_t"   : "long",
+    "int_fast32_t"   : "long",
+    "int_fast64_t"   : "long",
+    "uint_fast8_t"   : "ubyte",
+    "uint_fast16_t"  : "ulong",
+    "uint_fast32_t"  : "ulong",
+    "uint_fast64_t"  : "ulong",
 
-    "intptr_t"         : "long",
-    "uintptr_t"        : "ulong",
-    "intmax_t"         : "long",
-    "uintmax_t"        : "ulong",
-    "wchar_t"          : "int",
-    "__u_char"         : "ubyte",
+    "intptr_t"       : "long",
+    "uintptr_t"      : "ulong",
+    "intmax_t"       : "long",
+    "uintmax_t"      : "ulong",
+    "wchar_t"        : "int",
+    "__u_char"       : "ubyte",
 ];
 
 string[] defaultSkipList = [
@@ -135,13 +135,20 @@ version (ClonoaLibrary) {
         } else {
             enum compiler = "dmd";
         }
+
         if (args.length < 2) {
             writeln(i"Usage: $(args[0].baseName) <source.c|source.h>");
-            return -1;
+            return 1;
         }
+
         auto output = clonoaMain(compiler, true, args);
+        if (output.length == 0) {
+            writeln("Compiler error:");
+            write(__clonoaLastErrorOutput);
+            return 1;
+        }
         write(output);
-        return output.length ? 0 : 1;
+        return 0;
     }
 }
 
@@ -152,28 +159,31 @@ string clonoaMain(
     string symbolHeader = defaultSymbolHeader,
     string[string] typeMap = defaultTypeMap,
     string[] skipList = defaultSkipList,
+    string[] functionSkipList = defaultFunctionSkipList,
+    string attributes = "extern(C) nothrow @nogc",
 ) {
     auto result = appender!string();
-
     auto cPath  = args[1];
     auto cLines = File(cPath).byLine.map!(line => line.idup).array;
 
-    auto dPath  = cPath.baseName.stripExtension ~ ".di"; // args[2];
+    auto dPath = cPath.baseName.stripExtension ~ ".di";
     auto dResult = execute([compiler, "-o-", "-H", cPath]);
     if (dResult.status != 0) {
-        // writeln(i"Compiler `$(compiler)` failed:\n", dResult.output);
+        __clonoaLastErrorOutput = dResult.output;
         return "";
     }
     auto dLines = File(dPath).byLine.map!(line => line.idup).array;
 
-    auto allowedNames = extractNamesFromHeaderFile(cLines);
-    auto moduleName   = dPath.baseName.stripExtension;
+    auto allowedFunctionNames = extractFunctionsFromHeaderFile(cLines, functionSkipList);
+    auto moduleName = dPath.baseName.stripExtension;
+    auto headerName = cPath.baseName.stripExtension; // Probably the same thing as `moduleName`, but it's night and I can't think.
 
     result.clonoaWriteln("module ", moduleName, ";\n");
     if (symbolHeader.length) result.clonoaWriteln(symbolHeader, "\n");
-    result.clonoaWriteln("extern(C) nothrow @nogc:\n");
+    result.clonoaWriteln(attributes, ":\n");
+    result.insertSymbolsBasedOnHeaderName(headerName);
 
-    auto i = cast(size_t) 2;
+    auto i = 2UL;
     auto previousWasFunctionOrAlias = false;
     for (; i < dLines.length; i += 1) {
         auto line = dLines[i];
@@ -201,7 +211,9 @@ string clonoaMain(
             auto parts = cleanLine.split();
             auto name = parts.length > 1 ? parts[1] : ""; // Empty string for an anonymous enum.
             if (skipList.canFind(name)) continue;
-            if (!name.startsWith("_") || (canEmitTagStructs && name.startsWith("__tag"))) { // NOTE: D creates `__tag` structs sometimes for macros.
+
+            // NOTE: D creates `__tag` structs sometimes for macros.
+            if (!name.startsWith("_") || (canEmitTagStructs && name.startsWith("__tag"))) {
                 string[] block;
                 block ~= cleanLine;
                 i += 1;
@@ -221,6 +233,7 @@ string clonoaMain(
                     foreach (cType, dType; typeMap) {
                         outLine = outLine.replace(cType, dType);
                     }
+
                     enum indentation = "    ";
                     auto isInsideBlock = blockLineIndex != 0 && blockLineIndex != 1 && blockLineIndex != block.length - 1;
                     result.clonoaWriteln(isInsideBlock ? indentation : "", outLine);
@@ -233,19 +246,19 @@ string clonoaMain(
         }
 
         // Functions.
-        foreach (allowedName; allowedNames) {
-            if (!cleanLine.canFind(allowedName ~ "(")) continue;
+        foreach (name; allowedFunctionNames) {
+            if (!cleanLine.canFind(name ~ "(")) continue;
             auto outLine = cleanLine;
-            foreach (cType, dType; typeMap) {
-                outLine = outLine.replace(cType, dType);
-            }
+            foreach (cType, dType; typeMap) outLine = outLine.replace(cType, dType);
             outLine = outLine
                 .replace("alias,", "alias_,")
                 .replace("alias)", "alias_)");
 
+            // TODO: CHANGE THIS 100%! (when you get time)
             outLine = outLine.replace(", __builtin_va_list args)", ", ...)"); // Hack.
             outLine = outLine.replace(", va_list argp)", ", ...)");           // Hack.
             outLine = outLine.replace(", va_list args)", ", ...)");           // Hack.
+
             result.clonoaWriteln(outLine);
             previousWasFunctionOrAlias = true;
         }
@@ -259,6 +272,7 @@ string clonoaMain(
             if (parts.length == 2) {
                 auto rhs = parts[1].strip().stripRight(";").strip();
                 if (rhs.startsWith("_")) continue;
+                // TODO: CHANGE THIS 100%! (when you get time, same thing as the function code)
                 auto outLine = cleanLine.replace(", __builtin_va_list args)", ", ...)");
                 result.clonoaWriteln(outLine);
                 previousWasFunctionOrAlias = true;
@@ -270,7 +284,7 @@ string clonoaMain(
     return result.data;
 }
 
-string[] extractNamesFromHeaderFile(string[] lines) {
+string[] extractFunctionsFromHeaderFile(string[] lines, string[] functionSkipList) {
     string[] result;
     auto funcRegex = regex(`\b(\w+)\s*\)\s*\(|(\w+)\s*\(`);
     foreach (line; lines) {
@@ -279,19 +293,20 @@ string[] extractNamesFromHeaderFile(string[] lines) {
             auto match = matches[$ - 1];
             auto name = match[1].length ? match[1] : match[2];
             auto isMacro = name[0].isUpper && name[1 .. $].all!(c => c.isUpper || c.isDigit || c == '_');
-            if (!isMacro) {
+            if (!isMacro && !line.startsWith("static ") && !line.startsWith("__") && !functionSkipList.canFind(name)) {
                 result ~= name;
             }
         }
     }
-    return result;
+    return result.sort.uniq.array;
 }
 
 import std.ascii, std.string, std.path;
-import std.algorithm, std.array;
+import std.algorithm, std.array, std.container.array;
 import std.stdio, std.process, std.file;
-import std.regex, std.container.array;
-import std.format;
+import std.regex, std.format;
+
+string __clonoaLastErrorOutput;
 
 immutable dPrimitives = [
     "byte", "ubyte", "short", "ushort", "int", "uint",
@@ -308,4 +323,18 @@ alias clonaWrite = clonoaAppend;
 void clonoaWriteln(A, T)(ref A array, T[] args...) {
     array.clonaWrite(args);
     array.clonaWrite("\n");
+}
+
+void insertSymbolsBasedOnHeaderName(A)(ref A array, string name) {
+    switch (name) {
+        case "raylib":
+            array.clonoaWriteln("struct rAudioBuffer;");
+            array.clonoaWriteln("struct rAudioProcessor;");
+            break;
+        case "clay":
+            array.clonoaWriteln("struct Clay_Context;");
+            break;
+        default:
+    }
+    array.clonoaWriteln("");
 }

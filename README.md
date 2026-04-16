@@ -9,19 +9,22 @@ Compile and run with:
 
 ```sh
 rdmd clonoa.d
+# Or: ./clonoa.d
 ```
 
 ### CLI
+
 By default, Clonoa accepts one C file and prints the bindings to stdout:
 
 ```sh
 rdmd clonoa.d header.h > bindings.d
+# Or: ./clonoa.d header.h > bindings.d
 ```
 
 ### Library
 
-Clonoa can also be used it as a library by defining the `ClonoaLibrary` version flag.
-The function that creates the bindings is called `clonoaMain`.
+Clonoa can be used as a library by defining the `ClonoaLibrary` version flag.
+The function that creates the bindings is called `clonoaMain` and looks like this:
 
 ```d
 string clonoaMain(
@@ -31,5 +34,21 @@ string clonoaMain(
     string symbolHeader = defaultSymbolHeader,
     string[string] typeMap = defaultTypeMap,
     string[] skipList = defaultSkipList,
+    string[] functionSkipList = defaultFunctionSkipList,
+    string attributes = "extern(C) nothrow @nogc",
 );
 ```
+
+### SIMD Guards
+
+Some headers fail to parse with ImportC due to unsupported SIMD symbols.
+This can be fixed by adding the following at the top of the target header:
+
+```c
+#if __IMPORTC__
+    #include "../clonoa_simd_guards.h"
+#endif
+```
+
+Note that some headers may also need additional stub definitions for missing builtins.
+They can be added inside the `__IMPORTC__` block manually as needed.
