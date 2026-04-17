@@ -27,15 +27,16 @@ Clonoa can be used as a library by defining the `ClonoaLibrary` version flag.
 The function that creates the bindings is called `clonoaMain` and looks like this:
 
 ```d
-string clonoaMain(
+ClonoaResult clonoaMain(
     string compiler,
-    bool canEmitTagStructs,
-    string[] args,
-    string symbolHeader = defaultSymbolHeader,
-    string[string] typeMap = defaultTypeMap,
-    string[] skipList = defaultSkipList,
-    string[] functionSkipList = defaultFunctionSkipList,
-    string attributes = "extern(C) nothrow @nogc",
+    string headerPath,
+    string headerPrefix,
+    string[string] typeMap = null,
+    string[] typeSkipList = defaultTypeSkipList,
+    string[] funcSkipList = defaultFuncSkipList,
+    string[] lineSkipList = defaultLineSkipList,
+    string moduleSymbolHeader = defaultModuleSymbolHeader,
+    string moduleAttributes = "extern(C) nothrow @nogc",
 );
 ```
 

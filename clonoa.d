@@ -1,10 +1,14 @@
 #!/bin/env rdmd
 
+// TODO: Can parse the test header. I was about to use the `typeMap` in the new main function when I stopped.
+
 /// A tool that generates D bindings from C files using ImportC.
 
 // NOTE: Add library-specific symbols here.
-string defaultSymbolHeader = ``;
-string[] defaultFunctionSkipList = [];
+string defaultModuleSymbolHeader = ``;
+string[] defaultLineSkipList = [];
+string[] defaultFuncSkipList = [];
+enum indentation = "    ";
 
 string[string] defaultTypeMap = [
     // --- NOTE: Add library-specific type replacements here.
@@ -146,36 +150,195 @@ string[] defaultTypeSkipList = [
 version (ClonoaLibrary) {
 } else {
     int main(string[] args) {
-        version (OSX) {
-            enum compiler = "ldc2";
-        } else {
-            enum compiler = "dmd";
-        }
-
         if (args.length < 2) {
             writeln(i"Usage: $(args[0].baseName) <source.c|source.h>");
             return 1;
         }
 
-        auto output = clonoaMain(compiler, true, args);
-        if (output.length == 0) {
-            writeln("Compiler error:");
-            write(__clonoaLastErrorOutput);
+        version (OSX) {
+            enum compiler = "ldc2";
+        } else {
+            enum compiler = "dmd";
+        }
+        auto result = clonoaMain(compiler, args[1], "");
+        if (result.fault) {
+            writeln(i"Compiler error:\n$(result.faultMessage)");
             return 1;
         }
-        write(output);
+        write(result.output);
         return 0;
     }
 }
 
-string clonoaMain(
+struct ClonoaResult {
+    bool fault;
+    string faultMessage;
+    string output;
+
+    this(bool fault, string faultMessage) {
+        this.fault = fault;
+        this.faultMessage = faultMessage;
+    }
+
+    this(string output) {
+        this.output = output;
+    }
+}
+
+ClonoaResult clonoaMain(
+    string compiler,
+    string headerPath,
+    string headerPrefix,
+    string[string] typeMap = null,
+    string[] typeSkipList = defaultTypeSkipList,
+    string[] funcSkipList = defaultFuncSkipList,
+    string[] lineSkipList = defaultLineSkipList,
+    string moduleSymbolHeader = defaultModuleSymbolHeader,
+    string moduleAttributes = "extern(C) nothrow @nogc",
+) {
+    // Create the main variables.
+    auto output = appender!string();
+    auto headerLines = File(headerPath).byLine().map!(line => line.idup).array;
+    auto headerPathBaseName = headerPath.baseName.stripExtension();
+    auto modulePath = headerPath.baseName.stripExtension() ~ ".di";
+    {
+        auto executeResult = execute([compiler, "-o-", "-H", headerPath]);
+        if (executeResult.status != 0) return ClonoaResult(true, executeResult.output);
+    }
+    auto moduleLines = File(modulePath).byLine().map!(line => line.idup).array;
+    auto moduleName = modulePath.baseName.stripExtension().toLower();
+    if (headerPrefix.length == 0) headerPrefix = moduleName;
+
+    // Create the module header.
+    output.echo("module ", moduleName, ";\n");
+    output.echo(moduleAttributes, ":\n");
+    output.echon(moduleSymbolHeader, moduleSymbolHeader.length ? "\n" : "");
+    output.insertSymbolsBasedOnHeaderPathBaseName(headerPathBaseName);
+    insertSkipNamesBasedOnHeaderPathBaseName(headerPathBaseName, typeSkipList, funcSkipList, lineSkipList);
+
+    // Create the module symbols.
+    auto hadEmptyLoopOutputLine = true;
+    auto i = 3UL;
+    moduleLoop: for (; i < moduleLines.length - 2; i += 1) {
+        auto moduleLine = moduleLines[i].strip();
+        if (moduleLine.length == 0 || moduleLine.startsWith("static") || moduleLine.startsWith("/+")) continue moduleLoop;
+        foreach (line; lineSkipList) if (moduleLine.startsWith(line)) continue moduleLoop;
+
+        if (moduleLine.startsWith("alias")) {
+            auto parts = moduleLine.split(" ");
+            auto name = parts[1];
+            auto value = parts[3];
+            if (name.isPrivateName(typeSkipList)) continue;
+
+            auto outputLine = moduleLine.replace("alias " ~ name, "alias " ~ name.escapeKeyword());
+            if (value.canFind(".")) {
+                // NOTE: Enum values can have keywords and ignored names in them.
+                auto valueParts = value.split(".");
+                if (valueParts[0].isPrivateName(typeSkipList)) continue;
+                outputLine = outputLine.replace(valueParts[1], valueParts[1][0 .. $ - 1].escapeKeyword() ~ ";");
+            }
+            output.echo(outputLine);
+            hadEmptyLoopOutputLine = false;
+            continue;
+        }
+
+        auto isEnum = moduleLine.startsWith("enum");
+        auto isStruct = moduleLine.startsWith("struct");
+        auto isUnion = moduleLine.startsWith("union");
+        if (isEnum || isStruct || isUnion) {
+            auto parts = moduleLine.split(" ");
+            auto keyword = parts[0];
+            auto name = parts.length == 1 ? "" : (parts.length == 5 ? parts[2] : parts[1]);
+            if (name.isPrivateName(typeSkipList)) {
+                if (i + 1 < moduleLines.length && moduleLines[i + 1].strip() == "{") {
+                    i += 1;
+                    while (i < moduleLines.length) {
+                        if (moduleLines[i].strip() == "}") break;
+                        i += 1;
+                    }
+                }
+                continue;
+            }
+
+            if (moduleLine[$ - 1] == ';') {
+                auto outputLine = moduleLine.replace(keyword ~ " " ~ name, keyword ~ " " ~ name.escapeKeyword());
+                output.echo(outputLine);
+                hadEmptyLoopOutputLine = false;
+                continue;
+            } else {
+                auto outputLine1 = name.length ? moduleLine.replace(keyword ~ " " ~ name, keyword ~ " " ~ name.escapeKeyword()) : moduleLine;
+                output.echo(hadEmptyLoopOutputLine ? "" : "\n", outputLine1, " {");
+                i += 1;
+                while (i < moduleLines.length) {
+                    i += 1;
+                    moduleLine = moduleLines[i].strip();
+                    if (moduleLine == "}") {
+                        output.echo(moduleLine, "\n");
+                        hadEmptyLoopOutputLine = true;
+                        break;
+                    } else {
+                        auto memberParts = moduleLine.split(" ");
+                        auto memberName = moduleLine;
+                        if (isEnum) {
+                            memberName = memberParts[0][0 .. $ - 1];
+                        } else if (isStruct || isUnion) {
+                            memberName = memberParts[1];
+                        }
+                        auto memberEscapedName = memberName.escapeKeyword();
+                        auto outputLine2 = moduleLine
+                            .replace(memberName, memberEscapedName)
+                            .replace(" = void;", ";");
+                        output.echo(indentation, outputLine2);
+                    }
+                }
+                continue;
+            }
+        }
+
+        // Handle functions.
+        {
+            auto parts = moduleLine.split(" ");
+            auto name = moduleLine.startsWith("export") ? parts[2] : (parts.length > 1 ? parts[1] : "");
+            if (name.isPrivateName(funcSkipList)) {
+                if (i + 1 < moduleLines.length && moduleLines[i + 1].strip() == "{") {
+                    i += 1;
+                    while (i < moduleLines.length) {
+                        if (moduleLines[i].strip() == "}") break;
+                        i += 1;
+                    }
+                }
+                continue;
+            }
+        }
+
+        output.echo(moduleLine);
+    }
+
+    remove(modulePath);
+    return ClonoaResult(output.data);
+}
+
+bool isPrivateName(string name, string[] typeSkipList) {
+    return name.startsWith("_") || typeSkipList.canFind(name);
+}
+
+string escapeKeyword(string name) {
+    static immutable keywords = [
+        "alias", "version", "module", "import",
+        "scope", "ref", "out", "in", "function",
+        "delegate", "interface", "debug",
+    ];
+    return keywords.canFind(name) ? name ~ "_" : name;
+}
+
+string clonoaMainOld(
     string compiler,
     bool canEmitTagStructs,
     string[] args,
-    string symbolHeader = defaultSymbolHeader,
+    string symbolHeader = defaultModuleSymbolHeader,
     string[string] typeMap = defaultTypeMap,
     string[] typeSkipList = defaultTypeSkipList,
-    string[] functionSkipList = defaultFunctionSkipList,
+    string[] functionSkipList = defaultFuncSkipList,
     string attributes = "extern(C) nothrow @nogc",
 ) {
     auto result = appender!string();
@@ -196,11 +359,11 @@ string clonoaMain(
     auto headerNameUpper = headerName.toUpper();
     auto headerNameLower = headerName.toLower();
 
-    result.clonoaWriteln("module ", moduleName, ";\n");
-    if (symbolHeader.length) result.clonoaWriteln(symbolHeader, "\n");
-    result.clonoaWriteln(attributes, ":\n");
-    result.insertSymbolsBasedOnHeaderName(headerName);
-    insertSkipNamesBasedOnHeaderName(typeSkipList, functionSkipList, headerName);
+    result.echo("module ", moduleName, ";\n");
+    if (symbolHeader.length) result.echo(symbolHeader, "\n");
+    result.echo(attributes, ":\n");
+    result.insertSymbolsBasedOnHeaderPathBaseName(headerName);      string[] __temp;
+    insertSkipNamesBasedOnHeaderPathBaseName(headerName, typeSkipList, functionSkipList, __temp);
 
     auto i = 2UL;
     auto previousWasFunctionOrAlias = false;
@@ -238,7 +401,7 @@ string clonoaMain(
                 if (realNameIndex != -1 && (parts[realNameIndex].startsWith(headerNameLower) || parts[realNameIndex].startsWith(headerNameUpper))) {
                     auto outLine = cleanLine;
                     foreach (cType, dType; typeMap) outLine = outLine.replace(cType, dType);
-                    result.clonoaWriteln(outLine);
+                    result.echo(outLine);
                 }
                 continue;
             }
@@ -256,7 +419,7 @@ string clonoaMain(
 
             // Forward declaration — no body.
             if (nextLine != "{") {
-                result.clonoaWriteln(cleanLine);
+                result.echo(cleanLine);
                 continue;
             }
 
@@ -273,7 +436,7 @@ string clonoaMain(
 
             if (previousWasFunctionOrAlias) {
                 previousWasFunctionOrAlias = false;
-                result.clonoaWriteln("");
+                result.echo("");
             }
             foreach (blockLineIndex, blockLine; block) {
                 auto outLine = blockLine;
@@ -282,11 +445,10 @@ string clonoaMain(
                     .replace("alias ", "alias_ ")
                     .replace("function ", "function_ ")
                     .replace("version ", "version_ ");
-                enum indentation = "    ";
                 auto isInsideBlock = blockLineIndex != 0 && blockLineIndex != 1 && blockLineIndex != block.length - 1;
-                result.clonoaWriteln(isInsideBlock ? indentation : "", outLine);
+                result.echo(isInsideBlock ? indentation : "", outLine);
             }
-            result.clonoaWriteln("");
+            result.echo("");
             continue;
         }
 
@@ -300,7 +462,7 @@ string clonoaMain(
                 auto rhs = parts[1].strip().stripRight(";").strip();
                 if (rhs.startsWith("_")) continue;
                 auto outLine = cleanLine.replace(", __builtin_va_list args)", ", ...)");
-                result.clonoaWriteln(outLine);
+                result.echo(outLine);
                 previousWasFunctionOrAlias = true;
             }
             continue;
@@ -319,7 +481,7 @@ string clonoaMain(
             outLine = outLine.replace(", __builtin_va_list args)", ", ...");
             outLine = outLine.replace(", va_list argp)", ", ...)");
             outLine = outLine.replace(", va_list args)", ", ...)");
-            result.clonoaWriteln(outLine);
+            result.echo(outLine);
             previousWasFunctionOrAlias = true;
         }
     }
@@ -352,48 +514,40 @@ import std.regex, std.format;
 
 string __clonoaLastErrorOutput;
 
-immutable dPrimitives = [
-    "byte", "ubyte", "short", "ushort", "int", "uint",
-    "long", "ulong", "float", "double", "real",
-    "char", "wchar", "dchar", "bool", "void",
-];
-
-void clonoaAppend(A, T)(ref A array, T[] args...) {
-    foreach (ref arg; args) array.put(arg);
+void echon(ref Appender!string output, string[] args...) {
+    foreach (ref arg; args) output.put(arg);
 }
 
-alias clonaWrite = clonoaAppend;
-
-void clonoaWriteln(A, T)(ref A array, T[] args...) {
-    array.clonaWrite(args);
-    array.clonaWrite("\n");
+void echo(ref Appender!string output, string[] args...) {
+    output.echon(args);
+    output.echon("\n");
 }
 
-void insertSymbolsBasedOnHeaderName(A)(ref A array, string name) {
+void insertSymbolsBasedOnHeaderPathBaseName(ref Appender!string output, string name) {
     auto hasInserted = true;
     switch (name) {
         case "raylib":
-            array.clonoaWriteln("struct rAudioBuffer;");
-            array.clonoaWriteln("struct rAudioProcessor;");
+            output.echo("struct rAudioBuffer;");
+            output.echo("struct rAudioProcessor;");
             break;
         case "clay":
-            array.clonoaWriteln("struct Clay_Context;");
+            output.echo("struct Clay_Context;");
             break;
         case "SDL":
-            array.clonoaWriteln("struct SDL_BlitMap;");
-            array.clonoaWriteln("struct SDL_Window;");
+            output.echo("struct SDL_BlitMap;");
+            output.echo("struct SDL_Window;");
             break;
         default:
             hasInserted = false;
             break;
     }
-    if (hasInserted) array.clonoaWriteln("");
+    if (hasInserted) output.echo();
 }
 
-void insertSkipNamesBasedOnHeaderName(T)(ref T typeSkipList, ref T functionSkipList, string name) {
+void insertSkipNamesBasedOnHeaderPathBaseName(string name, ref string[] typeSkipList, ref string[] funcSkipList, ref string[] lineSkipList) {
     switch (name) {
         case "SDL":
-            typeSkipList ~= "struct SDL_AudioCVT;";
+            lineSkipList ~= "struct SDL_AudioCVT;";
             break;
         default:
             break;
