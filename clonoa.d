@@ -1,6 +1,6 @@
 #!/bin/env rdmd
 
-// TODO: Can parse the test header. I was about to use the `typeMap` in the new main function when I stopped.
+// TODO: Got stuck at SDL2. Has a `align variable` bug with sturcts and also ImportC might try to `cast(Uint8)` sometimes, something that is not handled by the typeMap...
 
 /// A tool that generates D bindings from C files using ImportC.
 
@@ -151,7 +151,7 @@ version (ClonoaLibrary) {
 } else {
     int main(string[] args) {
         if (args.length < 2) {
-            writeln(i"Usage: $(args[0].baseName) <source.c|source.h>");
+            writeln("Usage: ", args[0].baseName, " <source.c|source.h>");
             return 1;
         }
 
@@ -160,9 +160,14 @@ version (ClonoaLibrary) {
         } else {
             enum compiler = "dmd";
         }
-        auto result = clonoaMain(compiler, args[1], "");
+
+        auto headerPath = args[1];
+        auto headerPathBaseName = headerPath.baseName.stripExtension();
+        insertSkipNamesBasedOnHeaderPathBaseName(headerPathBaseName, defaultTypeSkipList, defaultFuncSkipList, defaultLineSkipList);
+
+        auto result = clonoaMain(compiler, headerPath, "", defaultTypeMap, defaultTypeSkipList, defaultFuncSkipList, defaultLineSkipList);
         if (result.fault) {
-            writeln(i"Compiler error:\n$(result.faultMessage)");
+            writeln("Compiler error:\n", result.faultMessage);
             return 1;
         }
         write(result.output);
@@ -189,7 +194,7 @@ ClonoaResult clonoaMain(
     string compiler,
     string headerPath,
     string headerPrefix,
-    string[string] typeMap = null,
+    string[string] typeMap = defaultTypeMap,
     string[] typeSkipList = defaultTypeSkipList,
     string[] funcSkipList = defaultFuncSkipList,
     string[] lineSkipList = defaultLineSkipList,
@@ -198,7 +203,7 @@ ClonoaResult clonoaMain(
 ) {
     // Create the main variables.
     auto output = appender!string();
-    auto headerLines = File(headerPath).byLine().map!(line => line.idup).array;
+    auto vaRegex = regex(`, \w+ \w+\)`);
     auto headerPathBaseName = headerPath.baseName.stripExtension();
     auto modulePath = headerPath.baseName.stripExtension() ~ ".di";
     {
@@ -214,7 +219,6 @@ ClonoaResult clonoaMain(
     output.echo(moduleAttributes, ":\n");
     output.echon(moduleSymbolHeader, moduleSymbolHeader.length ? "\n" : "");
     output.insertSymbolsBasedOnHeaderPathBaseName(headerPathBaseName);
-    insertSkipNamesBasedOnHeaderPathBaseName(headerPathBaseName, typeSkipList, funcSkipList, lineSkipList);
 
     // Create the module symbols.
     auto hadEmptyLoopOutputLine = true;
@@ -231,11 +235,16 @@ ClonoaResult clonoaMain(
             if (name.isPrivateName(typeSkipList)) continue;
 
             auto outputLine = moduleLine.replace("alias " ~ name, "alias " ~ name.escapeKeyword());
+            outputLine = outputLine.replaceTypeWithTypeFromTypeMap(value, typeMap);
             if (value.canFind(".")) {
                 // NOTE: Enum values can have keywords and ignored names in them.
                 auto valueParts = value.split(".");
                 if (valueParts[0].isPrivateName(typeSkipList)) continue;
                 outputLine = outputLine.replace(valueParts[1], valueParts[1][0 .. $ - 1].escapeKeyword() ~ ";");
+            } else if (outputLine.canFind(" function")) { // NOTE: A hack that works.
+                if (outputLine.canFind("__builtin_va_list") || outputLine.canFind("va_list")) {
+                    outputLine = outputLine.replaceAll(vaRegex, ", ...)");
+                }
             }
             output.echo(outputLine);
             hadEmptyLoopOutputLine = false;
@@ -261,7 +270,8 @@ ClonoaResult clonoaMain(
             }
 
             if (moduleLine[$ - 1] == ';') {
-                auto outputLine = moduleLine.replace(keyword ~ " " ~ name, keyword ~ " " ~ name.escapeKeyword());
+                auto outputLine = moduleLine.replace(name ~ " =", name.escapeKeyword() ~ " =");
+                if (parts.length == 5) outputLine = outputLine.replaceTypeWithTypeFromTypeMap(parts[1], typeMap);
                 output.echo(outputLine);
                 hadEmptyLoopOutputLine = false;
                 continue;
@@ -288,6 +298,17 @@ ClonoaResult clonoaMain(
                         auto outputLine2 = moduleLine
                             .replace(memberName, memberEscapedName)
                             .replace(" = void;", ";");
+                        if (isStruct || isUnion) {
+                            auto memberType = memberParts[0];
+                            outputLine2 = outputLine2.replaceTypeWithTypeFromTypeMap(memberType, typeMap);
+
+                            if (outputLine2.canFind(" function")) { // NOTE: A hack that works.
+                                if (outputLine2.canFind("__builtin_va_list") || outputLine2.canFind("va_list")) {
+                                    outputLine2 = outputLine2.replaceAll(vaRegex, ", ...)");
+                                }
+                                foreach (c, d; typeMap) outputLine2 = outputLine2.replace(c, d);
+                            }
+                        }
                         output.echo(indentation, outputLine2);
                     }
                 }
@@ -299,7 +320,7 @@ ClonoaResult clonoaMain(
         {
             auto parts = moduleLine.split(" ");
             auto name = moduleLine.startsWith("export") ? parts[2] : (parts.length > 1 ? parts[1] : "");
-            if (name.isPrivateName(funcSkipList)) {
+            if (name.isPrivateName(funcSkipList) || moduleLine.startsWith("auto ")) {
                 if (i + 1 < moduleLines.length && moduleLines[i + 1].strip() == "{") {
                     i += 1;
                     while (i < moduleLines.length) {
@@ -309,9 +330,19 @@ ClonoaResult clonoaMain(
                 }
                 continue;
             }
-        }
 
-        output.echo(moduleLine);
+            auto outputLine = moduleLine;
+            foreach (c, d; typeMap) outputLine = outputLine.replace(c, d);
+            if (outputLine.canFind("__builtin_va_list") || outputLine.canFind("va_list")) {
+                outputLine = outputLine.replaceAll(vaRegex, ", ...)");
+            }
+            foreach (keywordName; keywordNames) {
+                outputLine = outputLine
+                    .replace(keywordName ~ ",", keywordName ~ "_,")
+                    .replace(keywordName ~ ")", keywordName ~ "_)");
+            }
+            output.echo(outputLine);
+        }
     }
 
     remove(modulePath);
@@ -319,175 +350,21 @@ ClonoaResult clonoaMain(
 }
 
 bool isPrivateName(string name, string[] typeSkipList) {
-    return name.startsWith("_") || typeSkipList.canFind(name);
+    auto isPrivatePrivate = name.startsWith("_") && !name.startsWith("__tag");
+    return isPrivatePrivate || typeSkipList.canFind(name);
 }
 
 string escapeKeyword(string name) {
-    static immutable keywords = [
-        "alias", "version", "module", "import",
-        "scope", "ref", "out", "in", "function",
-        "delegate", "interface", "debug",
-    ];
-    return keywords.canFind(name) ? name ~ "_" : name;
+    return keywordNames.canFind(name) ? name ~ "_" : name;
 }
 
-string clonoaMainOld(
-    string compiler,
-    bool canEmitTagStructs,
-    string[] args,
-    string symbolHeader = defaultModuleSymbolHeader,
-    string[string] typeMap = defaultTypeMap,
-    string[] typeSkipList = defaultTypeSkipList,
-    string[] functionSkipList = defaultFuncSkipList,
-    string attributes = "extern(C) nothrow @nogc",
-) {
-    auto result = appender!string();
-    auto cPath  = args[1];
-    auto cLines = File(cPath).byLine.map!(line => line.idup).array;
-
-    auto dPath = cPath.baseName.stripExtension ~ ".di";
-    auto dResult = execute([compiler, "-o-", "-H", cPath]);
-    if (dResult.status != 0) {
-        __clonoaLastErrorOutput = dResult.output;
-        return "";
+string replaceTypeWithTypeFromTypeMap(string line, string name, string[string] typeMap) {
+    auto cleanName = name;
+    while (cleanName.endsWith("*")) cleanName = cleanName[0 .. $ - 1];
+    if (auto targetName = cleanName in typeMap) {
+        return line.replace(cleanName, *targetName);
     }
-    auto dLines = File(dPath).byLine.map!(line => line.idup).array;
-
-    auto allowedFunctionNames = extractFunctionsFromHeaderFile(cLines, functionSkipList);
-    auto moduleName = dPath.baseName.stripExtension.toLower;
-    auto headerName = cPath.baseName.stripExtension; // Probably the same thing as `moduleName`, but it's night and I can't think.
-    auto headerNameUpper = headerName.toUpper();
-    auto headerNameLower = headerName.toLower();
-
-    result.echo("module ", moduleName, ";\n");
-    if (symbolHeader.length) result.echo(symbolHeader, "\n");
-    result.echo(attributes, ":\n");
-    result.insertSymbolsBasedOnHeaderPathBaseName(headerName);      string[] __temp;
-    insertSkipNamesBasedOnHeaderPathBaseName(headerName, typeSkipList, functionSkipList, __temp);
-
-    auto i = 2UL;
-    auto previousWasFunctionOrAlias = false;
-    for (; i < dLines.length; i += 1) {
-        auto line = dLines[i];
-        auto cleanLine = line.strip();
-
-        // Drop macro templates.
-        if (cleanLine.startsWith("auto ")) {
-            if (i + 1 < dLines.length && dLines[i + 1].strip() == "{") {
-                i += 1;
-                while (i < dLines.length) {
-                    if (dLines[i].strip() == "}") break;
-                    i += 1;
-                }
-            }
-            continue;
-        }
-
-        // Blocks: struct, enum, union.
-        auto isBlock = cleanLine.startsWith("struct ")
-            || cleanLine.startsWith("union ")
-            || cleanLine.startsWith("enum ")
-            || cleanLine == "enum";
-        if (isBlock) {
-            auto parts = cleanLine.split();
-            auto name = parts.length > 1 ? parts[1] : "";
-
-            // Drop single-line enums (junk) but not block enums.
-            auto nextLine = i + 1 < dLines.length ? dLines[i + 1].strip() : "";
-            if (cleanLine.startsWith("enum ") && nextLine != "{") {
-                // TODO: Hack. Will clean stuff later.
-                auto realNameIndex = parts.length > 1 ? 1 : -1;
-                if (parts.length > 2) realNameIndex = 2;
-                if (realNameIndex != -1 && (parts[realNameIndex].startsWith(headerNameLower) || parts[realNameIndex].startsWith(headerNameUpper))) {
-                    auto outLine = cleanLine;
-                    foreach (cType, dType; typeMap) outLine = outLine.replace(cType, dType);
-                    result.echo(outLine);
-                }
-                continue;
-            }
-
-            // Somtimes ImportC will do the C thing and have the same struct 2 times.
-            bool isForwardStruct = cleanLine.endsWith(";") && cleanLine.startsWith("struct ");
-            if (isForwardStruct && typeSkipList.canFind(cleanLine)) continue;
-
-            if (typeSkipList.canFind(name)) continue;
-            if (cleanLine[$ - 1] == ';' && typeSkipList.canFind(cleanLine)) continue;
-            if (name.startsWith("_") && !(canEmitTagStructs && name.startsWith("__tag"))) {
-                i += 1;
-                continue;
-            }
-
-            // Forward declaration — no body.
-            if (nextLine != "{") {
-                result.echo(cleanLine);
-                continue;
-            }
-
-            // Full block.
-            string[] block;
-            block ~= cleanLine;
-            i += 1;
-            while (i < dLines.length) {
-                auto blockLine = dLines[i].strip();
-                block ~= blockLine;
-                if (blockLine == "}") break;
-                i += 1;
-            }
-
-            if (previousWasFunctionOrAlias) {
-                previousWasFunctionOrAlias = false;
-                result.echo("");
-            }
-            foreach (blockLineIndex, blockLine; block) {
-                auto outLine = blockLine;
-                foreach (cType, dType; typeMap) outLine = outLine.replace(cType, dType);
-                outLine = outLine
-                    .replace("alias ", "alias_ ")
-                    .replace("function ", "function_ ")
-                    .replace("version ", "version_ ");
-                auto isInsideBlock = blockLineIndex != 0 && blockLineIndex != 1 && blockLineIndex != block.length - 1;
-                result.echo(isInsideBlock ? indentation : "", outLine);
-            }
-            result.echo("");
-            continue;
-        }
-
-        // Aliases.
-        if (cleanLine.startsWith("alias")) {
-            if (cleanLine.canFind("__builtin_va_list") && !cleanLine.canFind("function(")) continue;
-            auto lhs = cleanLine.split("=")[0].replace("alias", "").strip();
-            if (lhs.startsWith("_") || typeSkipList.canFind(lhs)) continue;
-            auto parts = cleanLine.split("=");
-            if (parts.length == 2) {
-                auto rhs = parts[1].strip().stripRight(";").strip();
-                if (rhs.startsWith("_")) continue;
-                auto outLine = cleanLine.replace(", __builtin_va_list args)", ", ...)");
-                result.echo(outLine);
-                previousWasFunctionOrAlias = true;
-            }
-            continue;
-        }
-
-        // Functions.
-        foreach (name; allowedFunctionNames) {
-            if (!cleanLine.canFind(name ~ "(")) continue;
-            auto outLine = cleanLine;
-            foreach (cType, dType; typeMap) outLine = outLine.replace(cType, dType);
-            outLine = outLine
-                .replace("alias,", "alias_,")
-                .replace("alias)", "alias_)")
-                .replace("function,", "function_,")
-                .replace("function)", "function_)");
-            outLine = outLine.replace(", __builtin_va_list args)", ", ...");
-            outLine = outLine.replace(", va_list argp)", ", ...)");
-            outLine = outLine.replace(", va_list args)", ", ...)");
-            result.echo(outLine);
-            previousWasFunctionOrAlias = true;
-        }
-    }
-
-    remove(dPath);
-    return result.data;
+    return line;
 }
 
 string[] extractFunctionsFromHeaderFile(string[] lines, string[] functionSkipList) {
@@ -513,6 +390,12 @@ import std.stdio, std.process, std.file;
 import std.regex, std.format;
 
 string __clonoaLastErrorOutput;
+
+immutable keywordNames = [
+    "alias", "version", "module", "import",
+    "scope", "ref", "out", "in", "function",
+    "delegate", "interface", "debug", "true", "false",
+];
 
 void echon(ref Appender!string output, string[] args...) {
     foreach (ref arg; args) output.put(arg);
