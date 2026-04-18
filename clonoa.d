@@ -423,6 +423,7 @@ string[] keywordNames = [
     "alias", "version", "module", "import",
     "scope", "ref", "out", "in", "function",
     "delegate", "interface", "debug", "true", "false",
+    "real", "abstract", "final",
 ];
 
 struct ClonoaResult {
