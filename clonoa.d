@@ -461,7 +461,6 @@ struct ClonoaArgs {
         lineSkipList = defaultLineSkipList;
         moduleSymbolHeader = defaultModuleSymbolHeader;
         moduleAttributes = defaultModuleAttributes;
-        autoPopulateByName = true;
     }
 
     void appendSkipNamesBasedOnHeaderPathBaseName() {
