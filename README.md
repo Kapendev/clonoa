@@ -1,43 +1,82 @@
-# Clonoa (WIP)
+# Clonoa
 
 A tool that generates D bindings from C files using [ImportC](https://dlang.org/spec/importc.html).
 
 ## Usage
 
 The tool is just one D file: [`clonoa.d`](./clonoa.d).
-Compile and run with:
-
-```sh
-rdmd clonoa.d
-# Or: ./clonoa.d
-```
-
-### CLI
-
-By default, Clonoa accepts one C file and prints the bindings to stdout:
+By default, Clonoa accepts a C file and prints the bindings to stdout:
 
 ```sh
 rdmd clonoa.d header.h > bindings.d
 # Or: ./clonoa.d header.h > bindings.d
 ```
 
+### Example
+
+Below is an example using the `SDL2/SDL.h` header from the [headers](./headers) folder:
+
+```sh
+rdmd clonoa.d headers/SDL2/SDL.h > sdl.d
+# Or: ./clonoa.d headers/SDL2/SDL.h > sdl.d
+```
+
+Create an `app.d` file next to the bindings that looks like this:
+
+```d
+import sdl;
+pragma(lib, "SDL2");
+
+void main() {
+    SDL_Init(SDL_INIT_VIDEO);
+    auto window = SDL_CreateWindow("Hello", 100, 100, 800, 600, 0);
+    auto renderer = SDL_CreateRenderer(window, -1, 0);
+    auto running = true;
+    SDL_Event e;
+    while (running) {
+        while (SDL_PollEvent(&e)) if (e.type == SDL_QUIT) running = false;
+        SDL_SetRenderDrawColor(renderer, 107, 122, 85, 255);
+        SDL_RenderClear(renderer);
+        SDL_RenderPresent(renderer);
+    }
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+}
+```
+
+Compile and run with:
+
+```sh
+rdmd app.d
+```
+
 ### Library
 
 Clonoa can be used as a library by defining the `ClonoaLibrary` version flag.
-The function that creates the bindings is called `clonoaMain` and looks like this:
+The function that creates the bindings is called `clonoaRun` and looks like this:
 
 ```d
-ClonoaResult clonoaMain(
-    string compiler,
-    string headerPath,
-    string headerPrefix,
-    string[string] typeMap = null,
-    string[] typeSkipList = defaultTypeSkipList,
-    string[] funcSkipList = defaultFuncSkipList,
-    string[] lineSkipList = defaultLineSkipList,
-    string moduleSymbolHeader = defaultModuleSymbolHeader,
-    string moduleAttributes = "extern(C) nothrow @nogc",
-);
+ClonoaResult clonoaRun(in ClonoaArgs args);
+
+struct ClonoaResult {
+    string faultMessage;
+    string output;
+}
+
+struct ClonoaArgs {
+    string headerPath;
+    string headerPathBaseName;
+    string headerPrefix;
+    string compiler;
+    string[string] typeMap;
+    string[] typeSkipList;
+    string[] funcSkipList;
+    string[] lineSkipList;
+    string moduleSymbolHeader;
+    string moduleAttributes;
+
+    this(string headerPath);
+}
 ```
 
 ### SIMD Guards
