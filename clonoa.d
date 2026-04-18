@@ -63,6 +63,19 @@ ClonoaResult clonoaRun(in ClonoaArgs args) {
         foreach (line; args.lineSkipList) if (moduleLine.startsWith(line)) continue moduleLoop;
 
         if (moduleLine.startsWith("alias")) {
+            // Fix old-style function typedef: alias void foo(...) -> alias foo = void function(...)
+            if (!moduleLine.canFind("=")) {
+                auto parenIdx = moduleLine.indexOf("(");
+                if (parenIdx != -1) {
+                    auto beforeParen = moduleLine[0 .. parenIdx].strip();
+                    auto afterParen = moduleLine[parenIdx .. $];
+                    auto beforeParts = beforeParen.split(" ");
+                    auto retType = beforeParts[1 .. $ - 1].join(" ");
+                    auto funcName = beforeParts[$ - 1];
+                    moduleLine = "alias " ~ funcName ~ " = " ~ retType ~ " function" ~ afterParen;
+                }
+            }
+
             auto parts = moduleLine.split(" ");
             auto name = parts[1];
             auto value = parts[3];
