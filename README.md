@@ -74,8 +74,9 @@ struct ClonoaArgs {
     string[] lineSkipList;
     string moduleSymbolHeader;
     string moduleAttributes;
+    bool autoPopulateByName;
 
-    this(string headerPath);
+    this(string headerPath, bool autoPopulateByName = true);
 }
 ```
 

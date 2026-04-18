@@ -16,3 +16,7 @@ enum Foo {
 int   foo1();
 long  foo2();
 short foo3();
+
+unsigned char normalFunction(unsigned int a, unsigned int b) {
+    return a + b;
+}

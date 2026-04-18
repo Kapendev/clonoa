@@ -17,8 +17,6 @@ int clonoaMain(string[] args) {
     }
 
     auto clonoaArgs = ClonoaArgs(args[1]);
-    clonoaArgs.insertSkipNamesBasedOnHeaderPathBaseName();
-
     auto result = clonoaRun(clonoaArgs);
     if (result.faultMessage.length) {
         writeln("Compiler error:\n", result.faultMessage);
@@ -51,7 +49,9 @@ ClonoaResult clonoaRun(in ClonoaArgs args) {
     output.echo("module ", moduleName, ";\n");
     output.echo(args.moduleAttributes, ":\n");
     output.echon(args.moduleSymbolHeader, args.moduleSymbolHeader.length ? "\n" : "");
-    output.insertSymbolsBasedOnHeaderPathBaseName(args);
+    if (args.autoPopulateByName) {
+        output.insertSymbolsBasedOnHeaderPathBaseName(args);
+    }
 
     // Create the module body.
     auto hadEmptyLoopOutputLine = true;
@@ -213,18 +213,6 @@ void insertSymbolsBasedOnHeaderPathBaseName(ref Appender!string output, in Clono
             break;
     }
     if (hasInserted) output.echo();
-}
-
-void insertSkipNamesBasedOnHeaderPathBaseName(ref ClonoaArgs args) {
-    switch (args.headerPathBaseName) {
-        case "SDL":
-            if (args.headerPath.canFind("SDL2")) {
-                args.lineSkipList ~= "struct SDL_AudioCVT;";
-            }
-            break;
-        default:
-            break;
-    }
 }
 
 bool isPrivateName(string name, in ClonoaArgs args, string[] headerPrefixExceptions) {
@@ -435,11 +423,16 @@ struct ClonoaArgs {
     string[] lineSkipList;
     string moduleSymbolHeader;
     string moduleAttributes;
+    bool autoPopulateByName = true;
 
-    this(string headerPath) {
-        readyWithDefaults();
+    this(string headerPath, bool autoPopulateByName = true) {
         this.headerPath = headerPath;
         this.headerPathBaseName = headerPath.baseName.stripExtension();
+        this.autoPopulateByName = autoPopulateByName;
+        readyWithDefaults();
+        if (autoPopulateByName) {
+            appendSkipNamesBasedOnHeaderPathBaseName();
+        }
     }
 
     void readyWithDefaults() {
@@ -450,6 +443,19 @@ struct ClonoaArgs {
         lineSkipList = defaultLineSkipList;
         moduleSymbolHeader = defaultModuleSymbolHeader;
         moduleAttributes = defaultModuleAttributes;
+        autoPopulateByName = true;
+    }
+
+    void appendSkipNamesBasedOnHeaderPathBaseName() {
+        switch (headerPathBaseName) {
+            case "SDL":
+                if (headerPath.canFind("SDL2")) {
+                    lineSkipList ~= "struct SDL_AudioCVT;";
+                }
+                break;
+            default:
+                break;
+        }
     }
 }
 
