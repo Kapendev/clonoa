@@ -12,11 +12,12 @@ version (ClonoaLibrary) {
 
 int clonoaMain(string[] args) {
     if (args.length < 2) {
-        writeln("Usage: ", args[0].baseName, " <source.c|source.h>");
-        return 1;
+        writeln("Usage: ", args[0].baseName, " <source.c|source.h> [module name]");
+        return 0;
     }
 
     auto clonoaArgs = ClonoaArgs(args[1]);
+    clonoaArgs.moduleTargetName = args.length == 2 ? "" : args[2];
     auto result = clonoaRun(clonoaArgs);
     if (result.faultMessage.length) {
         writeln("Compiler error:\n", result.faultMessage);
@@ -36,7 +37,7 @@ ClonoaResult clonoaRun(in ClonoaArgs args) {
         if (executeResult.status != 0) return ClonoaResult.none(executeResult.output);
     }
     auto moduleLines = File(modulePath).byLine().map!(line => line.idup).array;
-    auto moduleName = modulePath.baseName.stripExtension().toLower();
+    auto moduleName = args.moduleTargetName.length ? args.moduleTargetName : modulePath.baseName.stripExtension().toLower();
 
     auto headerPrefixExceptions_TempHeaderPrefix = args.headerPrefix.length ? args.headerPrefix : args.headerPathBaseName;
     string[3] headerPrefixExceptions = [
@@ -69,6 +70,11 @@ ClonoaResult clonoaRun(in ClonoaArgs args) {
 
             auto outputLine = moduleLine.replace("alias " ~ name, "alias " ~ name.escapeKeyword());
             outputLine = outputLine.replaceTypeWithTypeFromTypeMap(value, args);
+            { // NOTE: Skip again with new names. This does not avoid any bugs like the anon enum one, but might be useful.
+                foreach (line; args.lineSkipList) {
+                    if (outputLine.startsWith(line)) continue moduleLoop;
+                }
+            }
             if (value.canFind(".")) {
                 // NOTE: Enum values can have keywords and ignored names in them.
                 auto valueParts = value.split(".");
@@ -105,6 +111,11 @@ ClonoaResult clonoaRun(in ClonoaArgs args) {
             if (moduleLine[$ - 1] == ';') {
                 auto outputLine = moduleLine.replace(name ~ " =", name.escapeKeyword() ~ " =");
                 if (parts.length == 5) outputLine = outputLine.replaceTypeWithTypeFromTypeMap(parts[1], args);
+                { // NOTE: Skip again with new names. This avoids some anon enum bugs.
+                    foreach (line; args.lineSkipList) {
+                        if (outputLine.startsWith(line)) continue moduleLoop;
+                    }
+                }
                 output.echo(outputLine);
                 hadEmptyLoopOutputLine = false;
                 continue;
@@ -243,6 +254,12 @@ void echon(ref Appender!string output, string[] args...) {
 void echo(ref Appender!string output, string[] args...) {
     output.echon(args);
     output.echon("\n");
+}
+
+string[string] mergeMaps(string[string] lhs, string[string] rhs) {
+    auto result = lhs.dup;
+    foreach (k, v; rhs) result[k] = v;
+    return result;
 }
 
 version (OSX) {
@@ -423,6 +440,7 @@ struct ClonoaArgs {
     string[] lineSkipList;
     string moduleSymbolHeader;
     string moduleAttributes;
+    string moduleTargetName;
     bool autoPopulateByName = true;
 
     this(string headerPath, bool autoPopulateByName = true) {
@@ -448,6 +466,9 @@ struct ClonoaArgs {
 
     void appendSkipNamesBasedOnHeaderPathBaseName() {
         switch (headerPathBaseName) {
+            case "raymath":
+                lineSkipList ~= "enum int FP_";
+                break;
             case "SDL":
                 if (headerPath.canFind("SDL2")) {
                     lineSkipList ~= "struct SDL_AudioCVT;";

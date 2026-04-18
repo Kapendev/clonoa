@@ -1,0 +1,11 @@
+{
+    "authors": [
+        "Alexandros F. G. Kapretsos"
+    ],
+    "copyright": "Copyright © 2026, Alexandros F. G. Kapretsos",
+    "description": "A single-file build system.",
+    "license": "MIT",
+    "name": "clonoa",
+    "targetType": "executable",
+    "mainSourceFile": "./clonoa.d"
+}
