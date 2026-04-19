@@ -12,20 +12,24 @@ rdmd clonoa.d header.h > bindings.d
 # Or: ./clonoa.d header.h > bindings.d
 ```
 
+The arguments:
+
+```
+clonoa <source.c|source.h> [module name] [header prefix]
+```
+
 ### Example
 
 Below is an example using the `SDL2/SDL.h` header from the [headers](./headers) folder:
 
 ```sh
-rdmd clonoa.d headers/SDL2/SDL.h > sdl.d
-# Or: ./clonoa.d headers/SDL2/SDL.h > sdl.d
+rdmd clonoa.d headers/SDL2/SDL.h sdl SDL > sdl.d
 ```
 
 Create an `app.d` file next to the bindings that looks like this:
 
 ```d
 import sdl;
-pragma(lib, "SDL2");
 
 void main() {
     SDL_Init(SDL_INIT_VIDEO);
@@ -47,7 +51,7 @@ void main() {
 Compile and run with:
 
 ```sh
-rdmd app.d
+rdmd -L=-lSDL2 app.d
 ```
 
 ### Library
@@ -75,7 +79,8 @@ struct ClonoaArgs {
     string moduleSymbolHeader;
     string moduleAttributes;
     string moduleTargetName;
-    bool autoPopulateByName;
+    bool strictPrefix;
+    bool autoPopulateByName = true;
 
     this(string headerPath, bool autoPopulateByName = true);
 }
