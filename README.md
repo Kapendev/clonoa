@@ -71,6 +71,7 @@ struct ClonoaArgs {
     string headerPath;
     string headerPathBaseName;
     string headerPrefix;
+    string[] headerPrefixExceptions;
     string compiler;
     string[string] typeMap;
     string[] typeSkipList;
@@ -80,7 +81,7 @@ struct ClonoaArgs {
     string moduleAttributes;
     string moduleTargetName;
     bool strictPrefix;
-    bool autoPopulateByName = true;
+    bool autoPopulateByName;
 
     this(string headerPath, bool autoPopulateByName = true);
 }
