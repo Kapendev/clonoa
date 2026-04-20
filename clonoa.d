@@ -549,3 +549,10 @@ import std.ascii, std.string, std.path;
 import std.algorithm, std.array, std.container.array;
 import std.stdio, std.process, std.file;
 import std.regex, std.format;
+
+// ---
+// Copyright 2025 Alexandros F. G. Kapretsos
+// SPDX-License-Identifier: MIT
+// Email: alexandroskapretsos@gmail.com
+// Project: https://github.com/Kapendev/clonoa
+// ---
