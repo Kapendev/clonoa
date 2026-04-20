@@ -37,7 +37,7 @@ They can be added inside the `__IMPORTC__` block manually as needed.
 
 ## Example
 
-Below is an example using the `SDL2/SDL.h` header from the [headers](./headers) folder:
+Below is an example using the [`SDL2/SDL.h`](./headers/SDL2/SDL.h) header from the headers folder:
 
 ```sh
 rdmd clonoa.d headers/SDL2/SDL.h sdl SDL > sdl.d
@@ -100,7 +100,7 @@ struct ClonoaArgs {
     string moduleAttributes;
     string moduleName;
     bool strictPrefix;
-    bool autoPopulateByName = true;
+    bool autoPopulateByName;
 
     this(string headerPath, string moduleName, string headerPrefix, bool autoPopulateByName = true);
 }
