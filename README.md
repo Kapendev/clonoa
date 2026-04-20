@@ -10,14 +10,14 @@ Clonoa is a single D file: [`clonoa.d`](./clonoa.d).
 By default, it accepts a C file and prints the bindings to stdout:
 
 ```sh
-rdmd clonoa.d header.h > bindings.d
+rdmd clonoa.d header.h name prefix > bindings.d
 # Or: ./clonoa.d header.h > bindings.d
 ```
 
 The CLI follows this structure:
 
 ```
-clonoa <source.c|source.h> [module name] [header prefix]
+clonoa <source.c|source.h> <module name> <header prefix> [include paths...]
 ```
 
 ## SIMD Guards

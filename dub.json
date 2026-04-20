@@ -7,5 +7,5 @@
     "license": "MIT",
     "name": "clonoa",
     "targetType": "executable",
-    "mainSourceFile": "./clonoa.d"
+    "mainSourceFile": "clonoa.d"
 }

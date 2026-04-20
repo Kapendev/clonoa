@@ -1,5 +1,7 @@
 #!/bin/env rdmd
 
+// TODO: The replacing of names is so bad... Fix in thrid refactor now that you know more about ImportC.
+
 /// A tool that generates D bindings from C files using ImportC.
 module clonoa;
 
@@ -11,15 +13,16 @@ version (ClonoaLibrary) {
 }
 
 int clonoaMain(string[] cliArgs) {
-    if (cliArgs.length < 2) {
-        writeln("Usage: ", cliArgs[0].baseName, " <source.c|source.h> [module name] [header prefix]");
-        return 0;
+    if (cliArgs.length - 1 < 3) {
+        writeln("Usage: ", cliArgs[0].baseName, " <source.c|source.h> <module name> <header prefix> [include paths...]");
+        return cliArgs.length == 1 ? 0 : 1;
     }
 
     auto args = ClonoaArgs(
         cliArgs[1],
-        cliArgs.length > 2 ? cliArgs[2] : "",
-        cliArgs.length > 3 ? cliArgs[3] : "",
+        cliArgs[2],
+        cliArgs[3],
+        cliArgs[4 .. $],
     );
 
     auto output = Array!char();
@@ -43,7 +46,11 @@ ClonoaResult clonoaRun(ref ClonoaArgs args, ref Array!char output) {
     auto vaRegex = regex(`, \w+ \w+\)`);
     auto modulePath = args.headerPathBaseName ~ ".di";
     {
-        auto executeResult = execute([args.compiler, "-o-", "-H", args.headerPath]);
+        auto executeArgs = [args.compiler, "-o-", "-H", args.headerPath];
+        if (args.headerIncludes.length) {
+            foreach (include; args.headerIncludes) executeArgs ~= "-P=-I" ~ include;
+        }
+        auto executeResult = execute(executeArgs);
         if (executeResult.status != 0) return ClonoaResult(executeResult.status, executeResult.output);
     }
     auto moduleLines = File(modulePath).byLine().map!(line => line.idup).array;
@@ -120,6 +127,7 @@ ClonoaResult clonoaRun(ref ClonoaArgs args, ref Array!char output) {
                 if (valueParts[0].isPrivateName(args, headerPrefixExceptions, true)) continue;
                 outputLine = outputLine.replace(valueParts[1], valueParts[1][0 .. $ - 1].escapeKeyword() ~ ";");
             } else if (outputLine.canFind(" function")) { // NOTE: A hack that works.
+                foreach (c, d; args.typeMap) outputLine = outputLine.replace(c, d);
                 if (outputLine.canFind("__builtin_va_list") || outputLine.canFind("va_list")) {
                     outputLine = outputLine.replaceAll(vaRegex, ", ...)");
                 }
@@ -128,6 +136,8 @@ ClonoaResult clonoaRun(ref ClonoaArgs args, ref Array!char output) {
                         .replace(" " ~ keywordName ~ ",", " " ~ keywordName ~ "_,")
                         .replace(" " ~ keywordName ~ ")", " " ~ keywordName ~ "_)");
                 }
+            } else {
+                /* foreach (c, d; args.typeMap) outputLine = outputLine.replace(c, d); */
             }
             output.echo(outputLine);
             hadEmptyLoopOutputLine = false;
@@ -255,6 +265,9 @@ void appendSymbolsByName(ref Array!char output, ref ClonoaArgs args) {
             output.echo("struct rAudioBuffer;");
             output.echo("struct rAudioProcessor;");
             break;
+        case "igraph":
+            output.echo("struct igraph_safelocale_s;");
+            break;
         case "clay":
             output.echo("struct Clay_Context;");
             break;
@@ -276,15 +289,6 @@ void appendSymbolsByName(ref Array!char output, ref ClonoaArgs args) {
 void appendExceptionsByName(ref ClonoaArgs args) {
     if (!args.autoPopulateByName) return;
     switch (args.headerPathBaseName) {
-        case "SDL":
-            if (args.headerPath.canFind("SDL2")) {
-                args.headerPrefixExceptions ~= "WindowShapeMode";
-                args.headerPrefixExceptions ~= "ShapeMode";
-                args.headerPrefixExceptions ~= "KMOD";
-                args.headerPrefixExceptions ~= "AUDIO";
-                args.headerPrefixExceptions ~= "DUMMY";
-            }
-            break;
         default:
             break;
     }
@@ -426,6 +430,7 @@ string[] defaultTypeSkipList = [
     "clock_t",
     "va_list",
     "max_align_t",
+    "_IO_lock_t",
 ];
 
 string[string] defaultTypeMap = [
@@ -489,6 +494,12 @@ string[string] defaultTypeMap = [
     "uintmax_t"      : "ulong",
     "wchar_t"        : "int",
     "__u_char"       : "ubyte",
+    "_IO_lock_t"     : "void",
+    "FILE"           : "void", // HACK? TODO: Think about it later.
+];
+
+string[] defaultHeaderPrefixExceptions = [
+    "s", "cs", "WindowShapeMode", "ShapeMode", "KMOD", "AUDIO", "DUMMY",
 ];
 
 string[] keywordNames = [
@@ -511,6 +522,7 @@ struct ClonoaArgs {
     string headerPathBaseName;
     string headerPrefix;
     string[] headerPrefixExceptions;
+    string[] headerIncludes;
     string compiler;
     string[string] typeMap;
     string[] typeSkipList;
@@ -522,16 +534,28 @@ struct ClonoaArgs {
     bool strictPrefix;
     bool autoPopulateByName;
 
-    this(string headerPath, string moduleName, string headerPrefix, bool autoPopulateByName = true) {
+    this(string headerPath, string moduleName, string headerPrefix, string[] headerIncludes, bool autoPopulateByName = true) {
         this.headerPath = headerPath;
         this.headerPathBaseName = headerPath.baseName.stripExtension();
         this.moduleName = moduleName;
-        this.headerPrefix = headerPrefix;
-        this.strictPrefix = headerPrefix.length != 0;
         this.autoPopulateByName = autoPopulateByName;
-
+        setHeaderPrefix(headerPrefix);
+        setHeaderIncludes(headerIncludes);
         readyWithDefaults();
         appendExceptionsByName(this);
+    }
+
+    void setHeaderPrefix(string newHeaderPrefix) {
+        if (newHeaderPrefix == "_") newHeaderPrefix = "";
+        headerPrefix = newHeaderPrefix;
+        strictPrefix = newHeaderPrefix.length != 0;
+    }
+
+    void setHeaderIncludes(string[] newHeaderIncludes...) {
+        headerIncludes = newHeaderIncludes;
+        foreach (ref include; headerIncludes) {
+            if (include.startsWith("-I")) include = include[2 .. $];
+        }
     }
 
     void readyWithDefaults() {
@@ -542,6 +566,7 @@ struct ClonoaArgs {
         lineSkipList = defaultLineSkipList;
         moduleSymbolHeader = defaultModuleSymbolHeader;
         moduleAttributes = defaultModuleAttributes;
+        headerPrefixExceptions = defaultHeaderPrefixExceptions;
     }
 }
 
