@@ -77,7 +77,7 @@ Clonoa can be used as a library by defining the `ClonoaLibrary` version flag.
 The function that creates the bindings is called `clonoaRun` and looks like this:
 
 ```d
-ClonoaResult clonoaRun(in ClonoaArgs args);
+ClonoaResult clonoaRun(ref ClonoaArgs args, ref Array!char output);
 
 struct ClonoaResult {
     int fault;
