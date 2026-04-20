@@ -281,6 +281,8 @@ void appendExceptionsByName(ref ClonoaArgs args) {
                 args.headerPrefixExceptions ~= "WindowShapeMode";
                 args.headerPrefixExceptions ~= "ShapeMode";
                 args.headerPrefixExceptions ~= "KMOD";
+                args.headerPrefixExceptions ~= "AUDIO";
+                args.headerPrefixExceptions ~= "DUMMY";
             }
             break;
         default:
@@ -518,7 +520,7 @@ struct ClonoaArgs {
     string moduleAttributes;
     string moduleName;
     bool strictPrefix;
-    bool autoPopulateByName = true;
+    bool autoPopulateByName;
 
     this(string headerPath, string moduleName, string headerPrefix, bool autoPopulateByName = true) {
         this.headerPath = headerPath;
