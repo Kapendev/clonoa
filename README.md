@@ -22,8 +22,8 @@ clonoa <source.c|source.h> [module name] [header prefix]
 
 ## SIMD Guards
 
-Some headers fail to parse with ImportC due to unsupported SIMD symbols.
-This can be fixed by adding the following at the top of the C file:
+Some files fail to parse with ImportC due to unsupported SIMD symbols.
+This can be fixed by adding the following at the top of the file:
 
 ```c
 #if __IMPORTC__
@@ -31,8 +31,8 @@ This can be fixed by adding the following at the top of the C file:
 #endif
 ```
 
-The [included header](./clonoa_simd_guards.h) in the example above can be found in this repository.
-Note that some C files may also need additional stub definitions for missing builtins.
+The [included header](./clonoa_simd_guards.h) and an example of the [`__IMPORTC__`](./headers/clay.h) block above can be found in this repository.
+Note that some files may also need additional stub definitions for missing builtins.
 They can be added inside the `__IMPORTC__` block manually as needed.
 
 ## Example
