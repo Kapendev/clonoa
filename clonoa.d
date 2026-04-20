@@ -10,51 +10,44 @@ version (ClonoaLibrary) {
     }
 }
 
-int clonoaMain(string[] args) {
-    if (args.length < 2) {
-        writeln("Usage: ", args[0].baseName, " <source.c|source.h> [module name] [header prefix]");
+int clonoaMain(string[] cliArgs) {
+    if (cliArgs.length < 2) {
+        writeln("Usage: ", cliArgs[0].baseName, " <source.c|source.h> [module name] [header prefix]");
         return 0;
     }
 
-    auto clonoaArgs = ClonoaArgs(args[1]);
-    clonoaArgs.moduleTargetName = args.length <= 2 ? "" : args[2];
-    if (args.length > 3) {
-        clonoaArgs.headerPrefix = args[3];
-        clonoaArgs.strictPrefix = true;
-    }
+    auto args = ClonoaArgs(
+        cliArgs[1],
+        cliArgs.length > 2 ? cliArgs[2] : "",
+        cliArgs.length > 3 ? cliArgs[3] : "",
+    );
 
-    if (clonoaArgs.autoPopulateByName && clonoaArgs.strictPrefix) { // TODO: REMOVE LATER. Just for testing.
-        if (clonoaArgs.headerPrefix == "SDL") {
-            clonoaArgs.headerPrefixExceptions ~= "WindowShapeMode";
-            clonoaArgs.headerPrefixExceptions ~= "ShapeMode";
-        }
-    }
-
-    auto result = clonoaRun(clonoaArgs);
-    if (result.faultMessage.length) {
-        if (args[1].endsWith(".h")) {
+    auto output = Array!char();
+    if (auto result = clonoaRun(args, output)) {
+        if (cliArgs[1].endsWith(".h")) {
             writeln("Note:");
-            writeln("  Files that end with `.h` require a newer DMD version.");
+            writeln("  Files that end with `.h` require a newer D version.");
             writeln("  Try wrapping the include in a `.c` file.");
         }
         writeln("Compiler error:\n", result.faultMessage);
         return 1;
     }
-    write(result.output);
+    write(output.data);
     return 0;
 }
 
-ClonoaResult clonoaRun(in ClonoaArgs args) {
+ClonoaResult clonoaRun(ref ClonoaArgs args, ref Array!char output) {
     // Create the main variables.
-    auto output = appender!string();
+    output.clear();
+    output.reserve(1024 * 1024);
     auto vaRegex = regex(`, \w+ \w+\)`);
     auto modulePath = args.headerPathBaseName ~ ".di";
     {
         auto executeResult = execute([args.compiler, "-o-", "-H", args.headerPath]);
-        if (executeResult.status != 0) return ClonoaResult.none(executeResult.output);
+        if (executeResult.status != 0) return ClonoaResult(executeResult.status, executeResult.output);
     }
     auto moduleLines = File(modulePath).byLine().map!(line => line.idup).array;
-    auto moduleName = args.moduleTargetName.length ? args.moduleTargetName : modulePath.baseName.stripExtension().toLower();
+    auto moduleName = args.moduleName.length ? args.moduleName : modulePath.baseName.stripExtension().toLower();
 
     auto headerPrefixExceptions_TempHeaderPrefix = args.headerPrefix.length ? args.headerPrefix : args.headerPathBaseName;
     string[] headerPrefixExceptions = args.headerPrefixExceptions ~ [
@@ -88,12 +81,13 @@ ClonoaResult clonoaRun(in ClonoaArgs args) {
     output.echo("module ", moduleName, ";\n");
     output.echo(args.moduleAttributes, ":\n");
     output.echon(args.moduleSymbolHeader, args.moduleSymbolHeader.length ? "\n" : "");
-    if (args.autoPopulateByName) output.insertSymbolsBasedOnHeaderPathBaseName(args);
+    output.appendSymbolsByName(args);
 
     // Create the module body.
     auto hadEmptyLoopOutputLine = true;
     moduleLoop: for (auto i = 3UL; i < moduleLines.length - 2; i += 1) {
         auto moduleLine = moduleLines[i].strip();
+        if (moduleLine.startsWith("extern ")) moduleLine = moduleLine["extern ".length .. $];
         if (moduleLine.length == 0 || moduleLine.startsWith("static") || moduleLine.startsWith("/+")) continue moduleLoop; /++/
         foreach (line; args.lineSkipList) if (moduleLine.startsWith(line)) continue moduleLoop;
 
@@ -219,7 +213,7 @@ ClonoaResult clonoaRun(in ClonoaArgs args) {
         // Handle functions.
         {
             auto parts = moduleLine.split(" ");
-            auto nameIndex = (moduleLine.startsWith("export ") || moduleLine.startsWith("extern ")) ? 2 : (parts.length > 1 ? 1 : -1);
+            auto nameIndex = moduleLine.startsWith("export ") ? 2 : (parts.length > 1 ? 1 : -1);
             auto name = nameIndex == -1 ? "" : parts[nameIndex].split("(")[0];
             if (args.funcSkipList.canFind(name)) continue moduleLoop;
             if (name.isPrivateName(args, headerPrefixExceptions, true) || moduleLine.startsWith("auto ")) {
@@ -250,10 +244,11 @@ ClonoaResult clonoaRun(in ClonoaArgs args) {
     }
 
     remove(modulePath);
-    return ClonoaResult.some(output.data);
+    return ClonoaResult();
 }
 
-void insertSymbolsBasedOnHeaderPathBaseName(ref Appender!string output, in ClonoaArgs args) {
+void appendSymbolsByName(ref Array!char output, ref ClonoaArgs args) {
+    if (!args.autoPopulateByName) return;
     auto hasInserted = true;
     switch (args.headerPathBaseName) {
         case "raylib":
@@ -278,7 +273,22 @@ void insertSymbolsBasedOnHeaderPathBaseName(ref Appender!string output, in Clono
     if (hasInserted) output.echo();
 }
 
-bool isPrivateName(string name, in ClonoaArgs args, string[] headerPrefixExceptions, bool isNameAndNotValue = false) {
+void appendExceptionsByName(ref ClonoaArgs args) {
+    if (!args.autoPopulateByName) return;
+    switch (args.headerPathBaseName) {
+        case "SDL":
+            if (args.headerPath.canFind("SDL2")) {
+                args.headerPrefixExceptions ~= "WindowShapeMode";
+                args.headerPrefixExceptions ~= "ShapeMode";
+                args.headerPrefixExceptions ~= "KMOD";
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+bool isPrivateName(string name, ref ClonoaArgs args, string[] headerPrefixExceptions, bool isNameAndNotValue = false) {
     if (name.length == 0) return true;
 
     auto isPrivatePrivate = name.startsWith("_");
@@ -299,7 +309,7 @@ string escapeKeyword(string name) {
     return keywordNames.canFind(name) ? name ~ "_" : name;
 }
 
-string replaceTypeWithTypeFromTypeMap(string line, string name, in ClonoaArgs args) {
+string replaceTypeWithTypeFromTypeMap(string line, string name, ref ClonoaArgs args) {
     auto cleanName = name;
     while (cleanName.endsWith("*")) cleanName = cleanName[0 .. $ - 1];
     if (auto targetName = cleanName in args.typeMap) {
@@ -308,11 +318,13 @@ string replaceTypeWithTypeFromTypeMap(string line, string name, in ClonoaArgs ar
     return line;
 }
 
-void echon(ref Appender!string output, string[] args...) {
-    foreach (ref arg; args) output.put(arg);
+void echon(ref Array!char output, const(char)[][] args...) {
+    foreach (arg; args) {
+        foreach (c; arg) output.insertBack(c);
+    }
 }
 
-void echo(ref Appender!string output, string[] args...) {
+void echo(ref Array!char output, const(char)[][] args...) {
     output.echon(args);
     output.echon("\n");
 }
@@ -486,20 +498,10 @@ string[] keywordNames = [
 ];
 
 struct ClonoaResult {
+    int fault;
     string faultMessage;
-    string output;
 
-    alias Self = typeof(this);
-
-    static
-    Self none(string faultMessage) {
-        return Self(faultMessage, "");
-    }
-
-    static
-    Self some(string output) {
-        return Self("", output);
-    }
+    alias fault this;
 }
 
 struct ClonoaArgs {
@@ -514,15 +516,20 @@ struct ClonoaArgs {
     string[] lineSkipList;
     string moduleSymbolHeader;
     string moduleAttributes;
-    string moduleTargetName;
+    string moduleName;
     bool strictPrefix;
     bool autoPopulateByName = true;
 
-    this(string headerPath, bool autoPopulateByName = true) {
+    this(string headerPath, string moduleName, string headerPrefix, bool autoPopulateByName = true) {
         this.headerPath = headerPath;
         this.headerPathBaseName = headerPath.baseName.stripExtension();
+        this.moduleName = moduleName;
+        this.headerPrefix = headerPrefix;
+        this.strictPrefix = headerPrefix.length != 0;
         this.autoPopulateByName = autoPopulateByName;
+
         readyWithDefaults();
+        appendExceptionsByName(this);
     }
 
     void readyWithDefaults() {
