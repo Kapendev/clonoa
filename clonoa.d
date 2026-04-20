@@ -141,7 +141,7 @@ ClonoaResult clonoaRun(ref ClonoaArgs args, ref Array!char output) {
             auto parts = moduleLine.split(" ");
             auto keyword = parts[0];
             auto name = parts.length == 1 ? "" : (parts.length == 5 ? parts[2] : parts[1].stripRight(";"));
-            if (name.isPrivateName(args, headerPrefixExceptions, true)) {
+            if (name.isPrivateName(args, headerPrefixExceptions, true) && name.length > 0) { // NOTE: Enums might not have a name and that is why we check the length.
                 if (i + 1 < moduleLines.length && moduleLines[i + 1].strip() == "{") {
                     i += 1;
                     while (i < moduleLines.length) {
