@@ -1,23 +1,23 @@
-# Clonoa
+
+# Clonoa (WIP) (NOT WORKING)
 
 A tool that generates D bindings from C files using [ImportC](https://dlang.org/spec/importc.html).
 
-![dw](https://media0.giphy.com/media/v1.Y2lkPTc5MGI3NjExMGI3MmR6NzJwcDNvOGt5N2g5cDdwNW9pbDRrMjBtM29sZDMwZGV2MyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/IjPLlyNa8ajCLfIsA6/giphy.gif)
+[![dw](https://media1.tenor.com/m/Un16sFcZfdIAAAAC/cat-fish.gif)](https://youtu.be/DbV8gy__qS0)
 
 ## Usage
 
 Clonoa is a single D file: [`clonoa.d`](./clonoa.d).
-By default, it accepts a C file and prints the bindings to stdout:
-
-```sh
-rdmd clonoa.d header.h name prefix > bindings.d
-# Or: ./clonoa.d header.h > bindings.d
-```
-
+By default, it accepts a C file and prints the bindings to stdout.
 The CLI follows this structure:
 
 ```
-clonoa <source.c|source.h> <module name> <header prefix> [include paths...]
+Usage: clonoa <compiler> <file.c|file.h> [options]
+Options:
+  -M=<name>     Module name
+  -I=<path>     Header include path
+  -P=<prefix>   Header prefix(es), can be colon-separated (e.g. SDL:KMOD)
+  -S=<name>     Opaque struct(s) to add, can be colon-separated (e.g. rAudioBuffer:rAudioProcessor)
 ```
 
 ## SIMD Guards
@@ -40,7 +40,7 @@ They can be added inside the `__IMPORTC__` block manually as needed.
 Below is an example using the [`SDL2/SDL.h`](./headers/SDL2/SDL.h) header from the headers folder:
 
 ```sh
-rdmd clonoa.d headers/SDL2/SDL.h sdl SDL > sdl.d
+rdmd clonoa.d dmd headers/SDL2/SDL.h -P=SDL:KMOD:AUDIO:DUMMY:WindowShapeMode:ShapeMode -S=SDL_BlitMap:SDL_Cursor:SDL_Window:_SDL_iconv_t > sdl.d
 ```
 
 Create an `app.d` file next to the bindings that looks like this:

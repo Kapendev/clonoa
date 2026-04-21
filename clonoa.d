@@ -1,5 +1,6 @@
 #!/bin/env rdmd
 
+// NOTE: Was about to write the new main loop code.
 // TODO: The replacing of names is so bad... Fix in thrid refactor now that you know more about ImportC.
 
 /// A tool that generates D bindings from C files using ImportC.
@@ -13,33 +14,154 @@ version (ClonoaLibrary) {
 }
 
 int clonoaMain(string[] cliArgs) {
-    if (cliArgs.length - 1 < 3) {
-        writeln("Usage: ", cliArgs[0].baseName, " <source.c|source.h> <module name> <header prefix> [include paths...]");
+    if (cliArgs.length < 3) {
+        printHelp(true);
         return cliArgs.length == 1 ? 0 : 1;
     }
+    if (!cliArgs[2].endsWith(".h") && !cliArgs[2].endsWith(".c")) {
+        writeln("Error: The second argument must be a `.h` or `.c` file.");
+        printHelp();
+        return 1;
+    }
 
-    auto args = ClonoaArgs(
-        cliArgs[1],
-        cliArgs[2],
-        cliArgs[3],
-        cliArgs[4 .. $],
-    );
+    auto clonoaArgs = ClonoaArgs();
+    clonoaArgs.compiler = cliArgs[1];
+    clonoaArgs.headerPath = cliArgs[2];
+    foreach (arg; cliArgs[3 .. $]) {
+        if (!arg.startsWith('-') || arg.length == 1) {
+            printInvalidOption(arg);
+            printHelp();
+            return 1;
+        }
+        auto option = arg[0 .. 2];
+        auto key = arg[1];
+        auto value = arg[(arg.length >= 3 && arg[2] == '=' ? 3 : 2) .. $];
+        switch (key) {
+            case 'M':
+                clonoaArgs.moduleName = value;
+                break;
+            case 'I':
+                auto prefix = "-P=-I"; // NOTE: The default compiler is DMD.
+                if (clonoaArgs.compiler == "ldc2") prefix = "-P -I";
+                if (clonoaArgs.compiler == "gdc")  prefix = "-Xpreprocessor -I";
+                clonoaArgs.headerIncludes ~= prefix ~ value;
+                break;
+            case 'P':
+                foreach (part; value.splitter(':')) clonoaArgs.headerPrefixes ~= part;
+                break;
+            case 'S':
+                foreach (part; value.splitter(':')) clonoaArgs.opaqueStructs ~= part;
+                break;
+            default:
+                printInvalidOption(option);
+                printHelp();
+                return 1;
+        }
+    }
+    if (!clonoaArgs.headerPath.exists) {
+        writeln("Error: The file doesn't exist.");
+        printHelp();
+        return 1;
+    }
 
     auto output = Array!char();
-    if (auto result = clonoaRun(args, output)) {
-        if (cliArgs[1].endsWith(".h")) {
-            writeln("Note:");
-            writeln("  Files that end with `.h` require a newer D version.");
-            writeln("  Try wrapping the include in a `.c` file.");
+    if (auto result = clonoaRun(clonoaArgs, output)) {
+        if (clonoaArgs.headerPath.endsWith(".h")) {
+            writeln("Note: Files that end with `.h` may not be supported by your compiler. Try wrapping the include in a `.c` file instead.");
         }
-        writeln("Compiler error:\n", result.faultMessage);
+        writeln(result.faultMessage);
         return 1;
     }
     write(output.data);
     return 0;
 }
 
-ClonoaResult clonoaRun(ref ClonoaArgs args, ref Array!char output) {
+ClonoaResult clonoaRun(ref ClonoaArgs clonoaArgs, ref Array!char output) {
+    enum diFistLine = 3UL;
+    enum diLastLineOffset = 2UL;
+
+    if (clonoaArgs.compiler.length == 0) return ClonoaResult(1, "No compiler specified.");
+    output.clear();
+    output.reserve(1024 * 1024);
+    auto diPath = clonoaArgs.headerPath.baseName.stripExtension() ~ ".di";
+    auto executeArgs = [clonoaArgs.compiler, "-o-", "-H", clonoaArgs.headerPath] ~ clonoaArgs.headerIncludes;
+    auto executeResult = execute(executeArgs);
+    if (executeResult.status) return ClonoaResult(executeResult.status, executeResult.output);
+    auto diLines = File(diPath).byLine().map!(line => line.idup).array;
+
+    // Collect names that have full definitions before main loop.
+    // Only names that start with `_` will be skipped here.
+    string[] definedStructs;
+    string[] definedEnumMembers;
+    for (auto i = diFistLine; i < diLines.length - diLastLineOffset; i += 1) {
+        auto diLine = diLines[i].strip();
+        auto hasBlock = i + 1 < diLines.length && diLines[i + 1].strip() == "{";
+        if (!hasBlock) continue;
+
+        if ((diLine.startsWith("struct"))) {
+            auto structParts = diLine.split();
+            auto structName = structParts[1].strip();
+            if (structName.startsWith("_")) continue;
+            definedStructs ~= structName;
+        } else if ((diLine.startsWith("enum"))) {
+            foreach (blockLine; BlockLineRange(diLines, i)) {
+                auto memberParts = blockLine.split(" = ");
+                auto memberName = memberParts[0].strip().strip(",");
+                if (memberName.startsWith("_")) continue;
+                definedEnumMembers ~= memberName;
+            }
+        }
+    }
+    writeln(definedStructs);
+    writeln();
+    writeln(definedEnumMembers);
+    // TODO: STOPPED HERE LAST TIME. Can parse the di file normally now.
+
+    remove(diPath);
+    return ClonoaResult();
+}
+
+struct BlockLineRange {
+    string[] lines;
+    size_t* i;
+
+    pragma(inline, true):
+
+    this(string[] lines, ref size_t i) {
+        i += 1;
+        if (lines[i].strip() == "{") i += 1;
+        this.lines = lines;
+        this.i = &i;
+    }
+
+    bool empty() {
+        return *i >= lines.length || lines[*i].strip() == "}";
+    }
+
+    string front() {
+        return lines[*i].strip();
+    }
+
+    void popFront() {
+        *i += 1;
+    }
+}
+
+void printHelp(bool canSkipEmptyLine = false) {
+    if (!canSkipEmptyLine) writeln();
+    writeln("Usage: clonoa <compiler> <file.c|file.h> [options]");
+    writeln("Options:");
+    writeln("  -M=<name>     Module name");
+    writeln("  -I=<path>     Header include path");
+    writeln("  -P=<prefix>   Header prefix(es), can be colon-separated (e.g. SDL:KMOD)");
+    writeln("  -S=<name>     Opaque struct(s) to add, can be colon-separated (e.g. rAudioBuffer:rAudioProcessor)");
+}
+
+void printInvalidOption(string option) {
+    writeln("Invalid option: `", option, '`');
+}
+
+ClonoaResult clonoaRunOld(ref ClonoaArgsOld args, ref Array!char output) {
     // Create the main variables.
     output.clear();
     output.reserve(1024 * 1024);
@@ -257,7 +379,7 @@ ClonoaResult clonoaRun(ref ClonoaArgs args, ref Array!char output) {
     return ClonoaResult();
 }
 
-void appendSymbolsByName(ref Array!char output, ref ClonoaArgs args) {
+void appendSymbolsByName(ref Array!char output, ref ClonoaArgsOld args) {
     if (!args.autoPopulateByName) return;
     auto hasInserted = true;
     switch (args.headerPathBaseName) {
@@ -286,7 +408,7 @@ void appendSymbolsByName(ref Array!char output, ref ClonoaArgs args) {
     if (hasInserted) output.echo();
 }
 
-void appendExceptionsByName(ref ClonoaArgs args) {
+void appendExceptionsByName(ref ClonoaArgsOld args) {
     if (!args.autoPopulateByName) return;
     switch (args.headerPathBaseName) {
         default:
@@ -294,7 +416,7 @@ void appendExceptionsByName(ref ClonoaArgs args) {
     }
 }
 
-bool isPrivateName(string name, ref ClonoaArgs args, string[] headerPrefixExceptions, bool isNameAndNotValue = false) {
+bool isPrivateName(string name, ref ClonoaArgsOld args, string[] headerPrefixExceptions, bool isNameAndNotValue = false) {
     if (name.length == 0) return true;
 
     auto isPrivatePrivate = name.startsWith("_");
@@ -315,7 +437,7 @@ string escapeKeyword(string name) {
     return keywordNames.canFind(name) ? name ~ "_" : name;
 }
 
-string replaceTypeWithTypeFromTypeMap(string line, string name, ref ClonoaArgs args) {
+string replaceTypeWithTypeFromTypeMap(string line, string name, ref ClonoaArgsOld args) {
     auto cleanName = name;
     while (cleanName.endsWith("*")) cleanName = cleanName[0 .. $ - 1];
     if (auto targetName = cleanName in args.typeMap) {
@@ -518,6 +640,21 @@ struct ClonoaResult {
 }
 
 struct ClonoaArgs {
+    string headerPath;
+    string moduleName;
+    string[] headerIncludes;
+    string[] headerPrefixes;
+    string[] opaqueStructs;
+    string compiler;
+
+    string moduleSymbolHeader = "extern(C) nothrow @nogc:";
+    string[string] typeMap;
+    string[] typeSkipList;
+    string[] funcSkipList;
+    string[] lineSkipList;
+}
+
+struct ClonoaArgsOld {
     string headerPath;
     string headerPathBaseName;
     string headerPrefix;
