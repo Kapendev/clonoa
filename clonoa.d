@@ -1,7 +1,6 @@
 #!/bin/env rdmd
 
-// NOTE: Was about to write the new main loop code.
-// TODO: The replacing of names is so bad... Fix in thrid refactor now that you know more about ImportC.
+// NOTE: The type map part needs to ne better. Just replacing randomly is not good lol.
 
 /// A tool that generates D bindings from C files using ImportC.
 module clonoa;
@@ -13,7 +12,7 @@ version (ClonoaLibrary) {
     }
 }
 
-int clonoaMain(string[] cliArgs) {
+int clonoaMain(string[] cliArgs...) {
     if (cliArgs.length < 3) {
         printHelp(true);
         return cliArgs.length == 1 ? 0 : 1;
@@ -25,8 +24,10 @@ int clonoaMain(string[] cliArgs) {
     }
 
     auto clonoaArgs = ClonoaArgs();
+    clonoaArgs.useDefaultTypeMapAndSkipLists();
     clonoaArgs.compiler = cliArgs[1];
     clonoaArgs.headerPath = cliArgs[2];
+    clonoaArgs.moduleName = clonoaArgs.headerPath.baseName.stripExtension().toLower();
     foreach (arg; cliArgs[3 .. $]) {
         if (!arg.startsWith('-') || arg.length == 1) {
             printInvalidOption(arg);
@@ -42,15 +43,21 @@ int clonoaMain(string[] cliArgs) {
                 break;
             case 'I':
                 auto prefix = "-P=-I"; // NOTE: The default compiler is DMD.
-                if (clonoaArgs.compiler == "ldc2") prefix = "-P -I";
-                if (clonoaArgs.compiler == "gdc")  prefix = "-Xpreprocessor -I";
+                if (clonoaArgs.compiler.endsWith("ldc2")) prefix = "-P -I";
+                if (clonoaArgs.compiler.endsWith("gdc")) prefix = "-Xpreprocessor -I";
                 clonoaArgs.headerIncludes ~= prefix ~ value;
                 break;
             case 'P':
-                foreach (part; value.splitter(':')) clonoaArgs.headerPrefixes ~= part;
+                foreach (part; value.splitter(':')) {
+                    clonoaArgs.headerPrefixes ~= part;
+                    clonoaArgs.headerPrefixes ~= "_" ~ part;
+                }
                 break;
             case 'S':
                 foreach (part; value.splitter(':')) clonoaArgs.opaqueStructs ~= part;
+                break;
+            case 'E':
+                clonoaArgs.removeRepeatedEnums = true;
                 break;
             default:
                 printInvalidOption(option);
@@ -90,7 +97,6 @@ ClonoaResult clonoaRun(ref ClonoaArgs clonoaArgs, ref Array!char output) {
     auto diLines = File(diPath).byLine().map!(line => line.idup).array;
 
     // Collect names that have full definitions before main loop.
-    // Only names that start with `_` will be skipped here.
     string[] definedStructs;
     string[] definedEnumMembers;
     for (auto i = diFistLine; i < diLines.length - diLastLineOffset; i += 1) {
@@ -98,352 +104,233 @@ ClonoaResult clonoaRun(ref ClonoaArgs clonoaArgs, ref Array!char output) {
         auto hasBlock = i + 1 < diLines.length && diLines[i + 1].strip() == "{";
         if (!hasBlock) continue;
 
-        if ((diLine.startsWith("struct"))) {
+        if (diLine.startsWith("struct")) {
             auto structParts = diLine.split();
             auto structName = structParts[1].strip();
-            if (structName.startsWith("_")) continue;
             definedStructs ~= structName;
-        } else if ((diLine.startsWith("enum"))) {
+        } else if (clonoaArgs.removeRepeatedEnums ? diLine.startsWith("enum") : diLine == "enum") {
             foreach (blockLine; BlockLineRange(diLines, i)) {
                 auto memberParts = blockLine.split(" = ");
                 auto memberName = memberParts[0].strip().strip(",");
-                if (memberName.startsWith("_")) continue;
                 definedEnumMembers ~= memberName;
             }
         }
     }
-    writeln(definedStructs);
-    writeln();
-    writeln(definedEnumMembers);
-    // TODO: STOPPED HERE LAST TIME. Can parse the di file normally now.
+
+    // Write module header.
+    output.echo("module ", clonoaArgs.moduleName, ";\n");
+    output.echo(clonoaArgs.moduleSymbolHeader, "\n");
+    foreach (name; clonoaArgs.opaqueStructs) output.echo("struct " ~ name ~ ";");
+    if (clonoaArgs.opaqueStructs.length) output.echo();
+
+    for (auto i = diFistLine; i < diLines.length - diLastLineOffset; i += 1) {
+        auto diLine = diLines[i].strip();
+        // Normalize.
+        if (diLine.startsWith("extern")) diLine = diLine["extern".length + 1 .. $];
+        if (diLine.startsWith("static") || diLine.startsWith("/+") || diLine.length == 0) continue;
+        if (diLine.startsWith("auto")) {
+            skipBlock(diLines, i);
+            continue;
+        }
+        foreach (line; clonoaArgs.lineSkipList) if (diLine == line) continue;
+        // Dispatch.
+        if (diLine.startsWith("alias")) {
+            processAlias(clonoaArgs, output, diLine, definedEnumMembers);
+        } else if (diLine.startsWith("struct") || diLine.startsWith("union") || diLine.startsWith("enum")) {
+            processBlock(clonoaArgs, output, diLines, i, definedEnumMembers, definedStructs);
+        } else {
+            processFunc(clonoaArgs, output, diLine);
+        }
+    }
 
     remove(diPath);
     return ClonoaResult();
 }
 
-struct BlockLineRange {
-    string[] lines;
-    size_t* i;
-
-    pragma(inline, true):
-
-    this(string[] lines, ref size_t i) {
-        i += 1;
-        if (lines[i].strip() == "{") i += 1;
-        this.lines = lines;
-        this.i = &i;
+void processAlias(ref ClonoaArgs clonoaArgs, ref Array!char output, string line, string[] definedEnumMembers) {
+    // Fix old-style functions: alias void foo(...) -> alias foo = void function(...)
+    if (line.canFind("(") && !line.canFind("=")) {
+        auto parenIndex = line.indexOf("(");
+        auto afterParen = line[parenIndex + 1 .. $];
+        auto beforeParen = line[0 .. parenIndex].strip();
+        auto beforeParenParts = beforeParen.split();
+        auto returnType = beforeParenParts[1 .. $ - 1].join(" ");
+        auto funcName = beforeParenParts[$ - 1];
+        line = "alias " ~ funcName ~ " = " ~ returnType ~ " function(" ~ afterParen;
     }
 
-    bool empty() {
-        return *i >= lines.length || lines[*i].strip() == "}";
+    auto parts = line.split();
+    auto name = parts[1];
+    auto value = parts[3];
+
+    if (name.isSkipped(clonoaArgs.typeSkipList, clonoaArgs.headerPrefixes)) return;
+    line = line.replace("alias " ~ name, "alias " ~ name.escapeKeyword());
+
+    if (value.canFind(".")) {
+        auto dotIndex = value.indexOf(".");
+        auto enumType = value[0 .. dotIndex];
+        auto enumMember = value[dotIndex + 1 .. $ - 1];
+        if (enumType.isSkipped(clonoaArgs.typeSkipList, clonoaArgs.headerPrefixes)) return;
+        foreach (defined; definedEnumMembers) if (enumMember == defined) return;
+        line = line.replace(enumType ~ ".", enumType.escapeKeyword() ~ ".");
+        line = line.replace("." ~ enumMember, "." ~ enumMember.escapeKeyword());
+    } else if (value.canFind("function(")) {
+        foreach (c, d; clonoaArgs.typeMap) line = line.replace(c, d);
+        line = fixFuncLine(line);
+    } else {
+        foreach (c, d; clonoaArgs.typeMap) line = line.replace(c, d);
+    }
+    output.echo(line);
+}
+
+void processBlock(ref ClonoaArgs clonoaArgs, ref Array!char output, string[] lines, ref size_t i, string[] definedEnumMembers, string[] definedStructs) {
+    auto line = lines[i].strip();
+    auto parts = line.split();
+    auto keyword = parts[0];
+    auto isEnum = keyword == "enum";
+    auto isStruct = keyword == "struct";
+    auto isUnion = keyword == "union";
+    auto name = parts.length > 1 ? parts[1].stripRight(";") : "";
+    if (isEnum && parts.length == 5) name = parts[2];
+
+    if (line.endsWith(";")) {
+        if (isStruct) {
+            foreach (defined; definedStructs) if (name == defined) return;
+        }
+        if (name.isSkipped(clonoaArgs.typeSkipList, clonoaArgs.headerPrefixes)) return;
+
+        foreach (c, d; clonoaArgs.typeMap) line = line.replace(c, d);
+        auto nameIndex = line.indexOf(name);
+        if (nameIndex != -1) {
+            line = line[0 .. nameIndex] ~ name.escapeKeyword() ~ line[nameIndex + name.length .. $];
+        }
+        output.echo(line);
+        return;
+    }
+    if (name.isSkipped(clonoaArgs.typeSkipList, clonoaArgs.headerPrefixes)) {
+        skipBlock(lines, i);
+        return;
     }
 
-    string front() {
-        return lines[*i].strip();
-    }
+    output.echo(keyword, name.length ? " " ~ name.escapeKeyword() : "", " {");
+    foreach (memberLine; BlockLineRange(lines, i)) {
+        if (memberLine.length == 0) continue;
+        if (memberLine.startsWith("align ")) memberLine = memberLine["align ".length .. $];
+        foreach (c, d; clonoaArgs.typeMap) memberLine = memberLine.replace(c, d); // TODO: YEAH BAD. FIX. Every line like that should be removed really.
+        memberLine = memberLine.replace(" = void;", ";");
 
-    void popFront() {
-        *i += 1;
+        if (isEnum) {
+            auto equalIndex = memberLine.indexOf(" = ");
+            auto commaIndex = memberLine.indexOf(",");
+            auto endIndex = equalIndex != -1 ? equalIndex : (commaIndex != -1 ? commaIndex : memberLine.length);
+            auto memberName = memberLine[0 .. endIndex];
+            memberLine = memberName.escapeKeyword() ~ memberLine[memberName.length .. $];
+        } else {
+            auto memberParts = memberLine.split();
+            auto memberName = memberParts[$ - 1][0 .. $ - 1];
+            auto escapedName = memberName.escapeKeyword();
+            memberLine = memberLine[0 .. $ - memberName.length - 1] ~ escapedName ~ ";";
+        }
+        output.echo(clonoaArgs.indentation, memberLine);
     }
+    output.echo("}\n");
+}
+
+void processFunc(ref ClonoaArgs clonoaArgs, ref Array!char output, string line) {
+    auto parts = line.split();
+    auto parenIndex = parts.length > 1 ? parts[1].indexOf("(") : -1;
+    auto name = parenIndex != -1 ? parts[1][0 .. parenIndex] : "";
+
+    if (name.isSkipped(clonoaArgs.funcSkipList, clonoaArgs.headerPrefixes)) return;
+    foreach (part; parts) if (part.startsWith("__")) return; // Libc leak heuristic.
+
+    foreach (c, d; clonoaArgs.typeMap) line = line.replace(c, d);
+    line = fixFuncLine(line);
+    output.echo(line);
 }
 
 void printHelp(bool canSkipEmptyLine = false) {
     if (!canSkipEmptyLine) writeln();
     writeln("Usage: clonoa <compiler> <file.c|file.h> [options]");
     writeln("Options:");
-    writeln("  -M=<name>     Module name");
-    writeln("  -I=<path>     Header include path");
-    writeln("  -P=<prefix>   Header prefix(es), can be colon-separated (e.g. SDL:KMOD)");
-    writeln("  -S=<name>     Opaque struct(s) to add, can be colon-separated (e.g. rAudioBuffer:rAudioProcessor)");
+    writeln("  -M=<name>   Module name");
+    writeln("  -I=<path>   Header include path");
+    writeln("  -P=<prefix> Header prefix(es), can be colon-separated (e.g. SDL:KMOD)");
+    writeln("  -S=<name>   Opaque struct(s) to add, can be colon-separated (e.g. rAudioBuffer:rAudioProcessor)");
+    writeln("  -E          Remove repeated enums (e.g. alias thing = TheEnum.thing;)");
 }
 
 void printInvalidOption(string option) {
     writeln("Invalid option: `", option, '`');
 }
 
-ClonoaResult clonoaRunOld(ref ClonoaArgsOld args, ref Array!char output) {
-    // Create the main variables.
-    output.clear();
-    output.reserve(1024 * 1024);
-    auto vaRegex = regex(`, \w+ \w+\)`);
-    auto modulePath = args.headerPathBaseName ~ ".di";
-    {
-        auto executeArgs = [args.compiler, "-o-", "-H", args.headerPath];
-        if (args.headerIncludes.length) {
-            foreach (include; args.headerIncludes) executeArgs ~= "-P=-I" ~ include;
-        }
-        auto executeResult = execute(executeArgs);
-        if (executeResult.status != 0) return ClonoaResult(executeResult.status, executeResult.output);
-    }
-    auto moduleLines = File(modulePath).byLine().map!(line => line.idup).array;
-    auto moduleName = args.moduleName.length ? args.moduleName : modulePath.baseName.stripExtension().toLower();
-
-    auto headerPrefixExceptions_TempHeaderPrefix = args.headerPrefix.length ? args.headerPrefix : args.headerPathBaseName;
-    string[] headerPrefixExceptions = args.headerPrefixExceptions ~ [
-        "_" ~ headerPrefixExceptions_TempHeaderPrefix,
-        "_" ~ headerPrefixExceptions_TempHeaderPrefix.toLower(),
-        "_" ~ headerPrefixExceptions_TempHeaderPrefix.toUpper(),
-    ];
-
-    // Collect names that have full definitions before main loop.
-    string[] definedEnumMembers;
-    string[] definedStructNames;
-    for (auto i = 3UL; i < moduleLines.length - 2; i += 1) {
-        auto moduleLine = moduleLines[i].strip();
-        auto hasBlock = i + 1 < moduleLines.length && moduleLines[i + 1].strip() == "{";
-        if ((moduleLine.startsWith("struct ")) && hasBlock) {
-            definedStructNames ~= moduleLine.split(" ")[1];
-        }
-        if ((moduleLine == "enum") && hasBlock) {
-            i += 2;
-            while (i < moduleLines.length) {
-                auto member = moduleLines[i].strip();
-                if (member == "}") break;
-                auto memberName = member[0 .. $ - 1].split(" = ")[0].strip();
-                definedEnumMembers ~= memberName;
-                i += 1;
-            }
-        }
-    }
-
-    // Create the module header.
-    output.echo("module ", moduleName, ";\n");
-    output.echo(args.moduleAttributes, ":\n");
-    output.echon(args.moduleSymbolHeader, args.moduleSymbolHeader.length ? "\n" : "");
-    output.appendSymbolsByName(args);
-
-    // Create the module body.
-    auto hadEmptyLoopOutputLine = true;
-    moduleLoop: for (auto i = 3UL; i < moduleLines.length - 2; i += 1) {
-        auto moduleLine = moduleLines[i].strip();
-        if (moduleLine.startsWith("extern ")) moduleLine = moduleLine["extern ".length .. $];
-        if (moduleLine.length == 0 || moduleLine.startsWith("static") || moduleLine.startsWith("/+")) continue moduleLoop; /++/
-        foreach (line; args.lineSkipList) if (moduleLine.startsWith(line)) continue moduleLoop;
-
-        if (moduleLine.startsWith("alias")) {
-            // Fix old-style function typedef: alias void foo(...) -> alias foo = void function(...)
-            if (!moduleLine.canFind("=")) {
-                auto parenIdx = moduleLine.indexOf("(");
-                if (parenIdx != -1) {
-                    auto beforeParen = moduleLine[0 .. parenIdx].strip();
-                    auto afterParen = moduleLine[parenIdx .. $];
-                    auto beforeParts = beforeParen.split(" ");
-                    auto retType = beforeParts[1 .. $ - 1].join(" ");
-                    auto funcName = beforeParts[$ - 1];
-                    moduleLine = "alias " ~ funcName ~ " = " ~ retType ~ " function" ~ afterParen;
-                }
-            }
-
-            auto parts = moduleLine.split(" ");
-            auto name = parts[1];
-            auto value = parts[3];
-            if (name.isPrivateName(args, headerPrefixExceptions, true)) continue;
-            if (value.isPrivateName(args, headerPrefixExceptions)) continue;
-
-            auto outputLine = moduleLine.replace("alias " ~ name, "alias " ~ name.escapeKeyword());
-            outputLine = outputLine.replaceTypeWithTypeFromTypeMap(value, args);
-            foreach (line; args.lineSkipList) if (outputLine.startsWith(line)) continue moduleLoop; // NOTE: Skip again with new names. This does not avoid any bugs like the anon enum one, but might be useful.
-            if (value.canFind(".")) {
-                // NOTE: Enum values can have keywords and ignored names in them.
-                auto valueParts = value.split(".");
-                if (valueParts[0].isPrivateName(args, headerPrefixExceptions, true)) continue;
-                outputLine = outputLine.replace(valueParts[1], valueParts[1][0 .. $ - 1].escapeKeyword() ~ ";");
-            } else if (outputLine.canFind(" function")) { // NOTE: A hack that works.
-                foreach (c, d; args.typeMap) outputLine = outputLine.replace(c, d);
-                if (outputLine.canFind("__builtin_va_list") || outputLine.canFind("va_list")) {
-                    outputLine = outputLine.replaceAll(vaRegex, ", ...)");
-                }
-                foreach (keywordName; keywordNames) {
-                    outputLine = outputLine
-                        .replace(" " ~ keywordName ~ ",", " " ~ keywordName ~ "_,")
-                        .replace(" " ~ keywordName ~ ")", " " ~ keywordName ~ "_)");
-                }
-            } else {
-                /* foreach (c, d; args.typeMap) outputLine = outputLine.replace(c, d); */
-            }
-            output.echo(outputLine);
-            hadEmptyLoopOutputLine = false;
-            continue;
-        }
-
-        auto isEnum = moduleLine.startsWith("enum");
-        auto isStruct = moduleLine.startsWith("struct");
-        auto isUnion = moduleLine.startsWith("union");
-        if (isEnum || isStruct || isUnion) {
-            auto parts = moduleLine.split(" ");
-            auto keyword = parts[0];
-            auto name = parts.length == 1 ? "" : (parts.length == 5 ? parts[2] : parts[1].stripRight(";"));
-            if (name.isPrivateName(args, headerPrefixExceptions, true) && name.length > 0) { // NOTE: Enums might not have a name and that is why we check the length.
-                if (i + 1 < moduleLines.length && moduleLines[i + 1].strip() == "{") {
-                    i += 1;
-                    while (i < moduleLines.length) {
-                        if (moduleLines[i].strip() == "}") break;
-                        i += 1;
-                    }
-                }
-                continue;
-            }
-
-            if (moduleLine[$ - 1] == ';') {
-                if (isEnum && definedEnumMembers.canFind(name)) continue moduleLoop;
-                if (isStruct && definedStructNames.canFind(name)) continue moduleLoop;
-
-                auto outputLine = moduleLine.replace(name ~ " =", name.escapeKeyword() ~ " =");
-                if (parts.length == 5) outputLine = outputLine.replaceTypeWithTypeFromTypeMap(parts[1], args);
-                foreach (line; args.lineSkipList) if (outputLine.startsWith(line)) continue moduleLoop; // NOTE: Skip again with new names. This avoids some anon enum bugs.
-                output.echo(outputLine);
-                hadEmptyLoopOutputLine = false;
-                continue;
-            } else {
-                auto outputLine1 = name.length ? moduleLine.replace(keyword ~ " " ~ name, keyword ~ " " ~ name.escapeKeyword()) : moduleLine;
-                output.echo(hadEmptyLoopOutputLine ? "" : "\n", outputLine1, " {");
-                i += 1;
-                while (i < moduleLines.length) {
-                    i += 1;
-                    moduleLine = moduleLines[i].strip();
-                    if (moduleLine == "}") {
-                        output.echo(moduleLine, "\n");
-                        hadEmptyLoopOutputLine = true;
-                        break;
-                    } else {
-                        auto hasCastOrArraySymbol = false;
-                        if (moduleLine.startsWith("align ")) moduleLine = moduleLine["align ".length .. $];
-                        if (moduleLine.canFind("cast(") || moduleLine.canFind("[")) {
-                            foreach (c, d; args.typeMap) moduleLine = moduleLine.replace(c, d);
-                            hasCastOrArraySymbol = true;
-                        }
-
-                        auto memberParts = moduleLine.split(" ");
-                        auto memberName = moduleLine;
-                        if (isEnum) {
-                            memberName = memberParts[0][0 .. $ - 1];
-                        } else if (isStruct || isUnion) {
-                            memberName = memberParts[1];
-                        }
-                        auto memberEscapedName = memberName.escapeKeyword();
-                        auto outputLine2 = moduleLine
-                            .replace(memberName, memberEscapedName)
-                            .replace(" = void;", ";");
-                        if (isStruct || isUnion) {
-                            auto memberType = memberParts[0];
-                            outputLine2 = outputLine2.replaceTypeWithTypeFromTypeMap(memberType, args);
-
-                            if (outputLine2.canFind(" function")) { // NOTE: A hack that works.
-                                if (outputLine2.canFind("__builtin_va_list") || outputLine2.canFind("va_list")) {
-                                    outputLine2 = outputLine2.replaceAll(vaRegex, ", ...)");
-                                }
-                                if (!hasCastOrArraySymbol) foreach (c, d; args.typeMap) outputLine2 = outputLine2.replace(c, d);
-                            }
-                        }
-                        output.echo(indentation, outputLine2);
-                    }
-                }
-                continue;
-            }
-        }
-
-        // Handle functions.
-        {
-            auto parts = moduleLine.split(" ");
-            auto nameIndex = moduleLine.startsWith("export ") ? 2 : (parts.length > 1 ? 1 : -1);
-            auto name = nameIndex == -1 ? "" : parts[nameIndex].split("(")[0];
-            if (args.funcSkipList.canFind(name)) continue moduleLoop;
-            if (name.isPrivateName(args, headerPrefixExceptions, true) || moduleLine.startsWith("auto ")) {
-                if (i + 1 < moduleLines.length && moduleLines[i + 1].strip() == "{") {
-                    i += 1;
-                    while (i < moduleLines.length) {
-                        if (moduleLines[i].strip() == "}") break;
-                        i += 1;
-                    }
-                }
-                continue;
-            }
-            foreach (part; parts) if (part.startsWith("__")) continue moduleLoop;
-
-            auto outputLine = moduleLine;
-            foreach (c, d; args.typeMap) outputLine = outputLine.replace(c, d);
-            if (outputLine.canFind("__builtin_va_list") || outputLine.canFind("va_list")) {
-                outputLine = outputLine.replaceAll(vaRegex, ", ...)");
-            }
-            foreach (keywordName; keywordNames) {
-                outputLine = outputLine
-                    .replace(" " ~ keywordName ~ ",", " " ~ keywordName ~ "_,")
-                    .replace(" " ~ keywordName ~ ")", " " ~ keywordName ~ "_)");
-            }
-            output.echo(outputLine);
-            hadEmptyLoopOutputLine = false;
-        }
-    }
-
-    remove(modulePath);
-    return ClonoaResult();
+bool isInSkipList(string name, string[] skipList) {
+    foreach (skip; skipList) if (name == skip) return true;
+    return false;
 }
 
-void appendSymbolsByName(ref Array!char output, ref ClonoaArgsOld args) {
-    if (!args.autoPopulateByName) return;
-    auto hasInserted = true;
-    switch (args.headerPathBaseName) {
-        case "raylib":
-            output.echo("struct rAudioBuffer;");
-            output.echo("struct rAudioProcessor;");
-            break;
-        case "igraph":
-            output.echo("struct igraph_safelocale_s;");
-            break;
-        case "clay":
-            output.echo("struct Clay_Context;");
-            break;
-        case "SDL":
-            if (args.headerPath.canFind("SDL2")) {
-                output.echo("struct SDL_BlitMap;");
-                output.echo("struct SDL_Cursor;");
-                output.echo("struct SDL_Window;");
-                output.echo("struct _SDL_iconv_t;");
-            }
-            break;
-        default:
-            hasInserted = false;
-            break;
-    }
-    if (hasInserted) output.echo();
+bool startsWithPrefixes(string name, string[] prefixes) {
+    if (prefixes.length == 0) return true;
+    foreach (prefix; prefixes) if (name.startsWith(prefix)) return true;
+    return false;
 }
 
-void appendExceptionsByName(ref ClonoaArgsOld args) {
-    if (!args.autoPopulateByName) return;
-    switch (args.headerPathBaseName) {
-        default:
-            break;
+bool isSkipped(string name, string[] skipList, string[] prefixes) {
+    if (name.length == 0) return false;
+    if (name.isInSkipList(skipList)) return true;
+    if (name.startsWith("__tag")) return false;
+    if (prefixes.length) {
+        if (!name.startsWithPrefixes(prefixes)) return true;
+    } else {
+        if (name.startsWith("_")) return true;
     }
+    return false;
 }
 
-bool isPrivateName(string name, ref ClonoaArgsOld args, string[] headerPrefixExceptions, bool isNameAndNotValue = false) {
-    if (name.length == 0) return true;
+void skipBlock(string[] lines, ref size_t i) {
+    foreach (blockLine; BlockLineRange(lines, i)) {}
+}
 
-    auto isPrivatePrivate = name.startsWith("_");
-    foreach (exception; headerPrefixExceptions) {
-        if (exception.length && name.startsWith(exception)) isPrivatePrivate = false;
+string fixVarargsInFuncLineParams(string line) {
+    if (line.canFind("__builtin_va_list") || line.canFind("va_list")) {
+        auto lastCommaIndex = line.lastIndexOf(",");
+        if (lastCommaIndex != -1) {
+            line = line[0 .. lastCommaIndex] ~ ", ...);";
+        } else {
+            line = line[0 .. line.indexOf("(")] ~ "(...);";
+        }
     }
-    if (isNameAndNotValue && args.strictPrefix) {
-        isPrivatePrivate = true;
-        string[3] headerStrictPrefixList = [args.headerPrefix, args.headerPrefix.toLower, args.headerPrefix.toUpper];
-        foreach (strictPrefix; headerStrictPrefixList) if (name.startsWith(strictPrefix)) isPrivatePrivate = false;
-        foreach (exception; headerPrefixExceptions) if (exception.length && name.startsWith(exception)) isPrivatePrivate = false;
+    return line;
+}
+
+string fixKeywordsInFuncLineParams(string line) {
+    static string[4][] funcKeywordReplacements;
+
+    if (funcKeywordReplacements.length == 0) {
+        foreach (keyword; keywords) {
+            funcKeywordReplacements ~= [
+                " " ~ keyword ~ ",",
+                " " ~ keyword ~ "_,",
+                " " ~ keyword ~ ")",
+                " " ~ keyword ~ "_)",
+            ];
+        }
     }
-    if (name.startsWith("__tag")) isPrivatePrivate = false;
-    return isPrivatePrivate || args.typeSkipList.canFind(name);
+
+    foreach (replacement; funcKeywordReplacements) {
+        line = line.replace(replacement[0], replacement[1]);
+        line = line.replace(replacement[2], replacement[3]);
+    }
+    return line;
+}
+
+string fixFuncLine(string line) {
+    return line.fixVarargsInFuncLineParams().fixKeywordsInFuncLineParams();
 }
 
 string escapeKeyword(string name) {
-    return keywordNames.canFind(name) ? name ~ "_" : name;
-}
-
-string replaceTypeWithTypeFromTypeMap(string line, string name, ref ClonoaArgsOld args) {
-    auto cleanName = name;
-    while (cleanName.endsWith("*")) cleanName = cleanName[0 .. $ - 1];
-    if (auto targetName = cleanName in args.typeMap) {
-        return line.replace(cleanName, *targetName);
-    }
-    return line;
+    foreach (keyword; keywords) if (keyword == name) return name ~ "_";
+    return name;
 }
 
 void echon(ref Array!char output, const(char)[][] args...) {
@@ -463,25 +350,36 @@ string[string] mergeMaps(string[string] lhs, string[string] rhs) {
     return result;
 }
 
-version (OSX) {
-    enum defaultCompiler = "ldc2";
-} else {
-    enum defaultCompiler = "dmd";
+void useDefaultTypeMapAndSkipLists(ref ClonoaArgs clonoaArgs) {
+    clonoaArgs.typeMap = defaultTypeMap;
+    clonoaArgs.typeSkipList = defaultTypeSkipList;
+    clonoaArgs.funcSkipList = defaultFuncSkipList;
+    clonoaArgs.lineSkipList = defaultLineSkipList;
 }
-enum indentation = "    ";
-enum defaultModuleAttributes = "extern(C) nothrow @nogc";
-enum defaultModuleSymbolHeader = "";
+
+enum defaultModuleSymbolHeader = "extern(C) nothrow @nogc:";
+enum defaultIndentation = "    ";
 
 string[] defaultLineSkipList = [];
 
 string[] defaultFuncSkipList = [
-    "erf", "erff", "erfl",
-    "erfc", "erfcf", "erfcl",
-    "lgamma", "lgammaf", "lgammal",
-    "tgamma", "tgammaf", "tgammal",
+    "erf",
+    "erff",
+    "erfl",
+    "erfc",
+    "erfcf",
+    "erfcl",
+    "lgamma",
+    "lgammaf",
+    "lgammal",
+    "tgamma",
+    "tgammaf",
+    "tgammal",
 ];
 
 string[] defaultTypeSkipList = [
+    "true",
+    "false",
     "__int8_t",
     "__int16_t",
     "__int32_t",
@@ -544,7 +442,6 @@ string[] defaultTypeSkipList = [
     "div_t",
     "ldiv_t",
     "lldiv_t",
-    "FILE",
     "fpos_t",
     "wint_t",
     "ssize_t",
@@ -553,6 +450,7 @@ string[] defaultTypeSkipList = [
     "va_list",
     "max_align_t",
     "_IO_lock_t",
+    "FILE",
 ];
 
 string[string] defaultTypeMap = [
@@ -608,7 +506,7 @@ string[string] defaultTypeMap = [
     "uint_fast64_t"  : "ulong",
 
     "float_t"        : "float",
-    "double_t"        : "double",
+    "double_t"       : "double",
 
     "intptr_t"       : "long",
     "uintptr_t"      : "ulong",
@@ -616,26 +514,35 @@ string[string] defaultTypeMap = [
     "uintmax_t"      : "ulong",
     "wchar_t"        : "int",
     "__u_char"       : "ubyte",
-    "_IO_lock_t"     : "void",
-    "FILE"           : "void", // HACK? TODO: Think about it later.
+    "_IO_lock_t"     : "void", // HACK? TODO: Think about it later.
+    "FILE*"          : "void", // HACK? TODO: Think about it later.
 ];
 
-string[] defaultHeaderPrefixExceptions = [
-    "s", "cs", "WindowShapeMode", "ShapeMode", "KMOD", "AUDIO", "DUMMY",
-];
-
-string[] keywordNames = [
-    "true", "false", "null", "real",
-    "abstract", "final", "interface", "delegate", "function",
-    "module", "import", "version",
-    "scope", "ref", "out", "in",
-    "alias", "is", "debug",
+string[] keywords = [
+    "true",
+    "false",
+    "null",
+    "real",
+    "abstract",
+    "final",
+    "interface",
+    "delegate",
+    "function",
+    "import",
+    "module",
+    "version",
+    "scope",
+    "ref",
+    "out",
+    "in",
+    "alias",
+    "debug",
+    "is",
 ];
 
 struct ClonoaResult {
     int fault;
     string faultMessage;
-
     alias fault this;
 }
 
@@ -647,70 +554,44 @@ struct ClonoaArgs {
     string[] opaqueStructs;
     string compiler;
 
-    string moduleSymbolHeader = "extern(C) nothrow @nogc:";
+    string moduleSymbolHeader = defaultModuleSymbolHeader;
+    string indentation = defaultIndentation;
     string[string] typeMap;
     string[] typeSkipList;
     string[] funcSkipList;
     string[] lineSkipList;
+    bool removeRepeatedEnums;
 }
 
-struct ClonoaArgsOld {
-    string headerPath;
-    string headerPathBaseName;
-    string headerPrefix;
-    string[] headerPrefixExceptions;
-    string[] headerIncludes;
-    string compiler;
-    string[string] typeMap;
-    string[] typeSkipList;
-    string[] funcSkipList;
-    string[] lineSkipList;
-    string moduleSymbolHeader;
-    string moduleAttributes;
-    string moduleName;
-    bool strictPrefix;
-    bool autoPopulateByName;
+struct BlockLineRange {
+    string[] lines;
+    size_t* i;
 
-    this(string headerPath, string moduleName, string headerPrefix, string[] headerIncludes, bool autoPopulateByName = true) {
-        this.headerPath = headerPath;
-        this.headerPathBaseName = headerPath.baseName.stripExtension();
-        this.moduleName = moduleName;
-        this.autoPopulateByName = autoPopulateByName;
-        setHeaderPrefix(headerPrefix);
-        setHeaderIncludes(headerIncludes);
-        readyWithDefaults();
-        appendExceptionsByName(this);
+    pragma(inline, true):
+
+    this(string[] lines, ref size_t i) {
+        i += 1;
+        if (lines[i].strip() == "{") i += 1;
+        this.lines = lines;
+        this.i = &i;
     }
 
-    void setHeaderPrefix(string newHeaderPrefix) {
-        if (newHeaderPrefix == "_") newHeaderPrefix = "";
-        headerPrefix = newHeaderPrefix;
-        strictPrefix = newHeaderPrefix.length != 0;
+    bool empty() {
+        return *i >= lines.length || lines[*i].strip() == "}";
     }
 
-    void setHeaderIncludes(string[] newHeaderIncludes...) {
-        headerIncludes = newHeaderIncludes;
-        foreach (ref include; headerIncludes) {
-            if (include.startsWith("-I")) include = include[2 .. $];
-        }
+    string front() {
+        return lines[*i].strip();
     }
 
-    void readyWithDefaults() {
-        compiler = defaultCompiler;
-        typeMap = defaultTypeMap;
-        typeSkipList = defaultTypeSkipList;
-        funcSkipList = defaultFuncSkipList;
-        lineSkipList = defaultLineSkipList;
-        moduleSymbolHeader = defaultModuleSymbolHeader;
-        moduleAttributes = defaultModuleAttributes;
-        headerPrefixExceptions = defaultHeaderPrefixExceptions;
+    void popFront() {
+        *i += 1;
     }
 }
 
 import std.ascii, std.string, std.path;
 import std.algorithm, std.array, std.container.array;
 import std.stdio, std.process, std.file;
-import std.regex, std.format;
 
 // ---
 // Copyright 2025 Alexandros F. G. Kapretsos

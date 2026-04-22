@@ -1,5 +1,5 @@
 
-# Clonoa (WIP) (NOT WORKING)
+# Clonoa (WIP)
 
 A tool that generates D bindings from C files using [ImportC](https://dlang.org/spec/importc.html).
 
@@ -14,10 +14,11 @@ The CLI follows this structure:
 ```
 Usage: clonoa <compiler> <file.c|file.h> [options]
 Options:
-  -M=<name>     Module name
-  -I=<path>     Header include path
-  -P=<prefix>   Header prefix(es), can be colon-separated (e.g. SDL:KMOD)
-  -S=<name>     Opaque struct(s) to add, can be colon-separated (e.g. rAudioBuffer:rAudioProcessor)
+  -M=<name>   Module name
+  -I=<path>   Header include path
+  -P=<prefix> Header prefix(es), can be colon-separated (e.g. SDL:KMOD)
+  -S=<name>   Opaque struct(s) to add, can be colon-separated (e.g. rAudioBuffer:rAudioProcessor)
+  -E          Remove repeated enums (e.g. alias thing = TheEnum.thing;)
 ```
 
 ## SIMD Guards
@@ -40,7 +41,8 @@ They can be added inside the `__IMPORTC__` block manually as needed.
 Below is an example using the [`SDL2/SDL.h`](./headers/SDL2/SDL.h) header from the headers folder:
 
 ```sh
-rdmd clonoa.d dmd headers/SDL2/SDL.h -P=SDL:KMOD:AUDIO:DUMMY:WindowShapeMode:ShapeMode -S=SDL_BlitMap:SDL_Cursor:SDL_Window:_SDL_iconv_t > sdl.d
+# Filtering with prefixes and creating opaque structs that got skipped by ImportC.
+rdmd clonoa.d dmd headers/SDL2/SDL.h -P=SDL:KMOD:AUDIO:DUMMY:WindowShapeMode:ShapeMode -S=SDL_Window:SDL_Cursor:SDL_BlitMap:_SDL_iconv_t > sdl.d
 ```
 
 Create an `app.d` file next to the bindings that looks like this:
@@ -82,26 +84,23 @@ ClonoaResult clonoaRun(ref ClonoaArgs args, ref Array!char output);
 struct ClonoaResult {
     int fault;
     string faultMessage;
-
     alias fault this;
 }
 
 struct ClonoaArgs {
     string headerPath;
-    string headerPathBaseName;
-    string headerPrefix;
-    string[] headerPrefixExceptions;
+    string moduleName;
+    string[] headerIncludes;
+    string[] headerPrefixes;
+    string[] opaqueStructs;
     string compiler;
+
+    string moduleSymbolHeader = defaultModuleSymbolHeader;
+    string indentation = defaultIndentation;
     string[string] typeMap;
     string[] typeSkipList;
     string[] funcSkipList;
     string[] lineSkipList;
-    string moduleSymbolHeader;
-    string moduleAttributes;
-    string moduleName;
-    bool strictPrefix;
-    bool autoPopulateByName;
-
-    this(string headerPath, string moduleName, string headerPrefix, bool autoPopulateByName = true);
+    bool removeRepeatedEnums;
 }
 ```
