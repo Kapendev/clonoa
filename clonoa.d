@@ -51,6 +51,8 @@ int clonoaMain(string[] cliArgs...) {
                 foreach (part; value.splitter(':')) {
                     clonoaArgs.headerPrefixes ~= part;
                     clonoaArgs.headerPrefixes ~= "_" ~ part;
+                    if (part[0].isUpper) clonoaArgs.headerPrefixes ~= part.toLower();
+                    if (part[0].isLower) clonoaArgs.headerPrefixes ~= part.toUpper();
                 }
                 break;
             case 'S':
@@ -127,7 +129,7 @@ ClonoaResult clonoaRun(ref ClonoaArgs clonoaArgs, ref Array!char output) {
         auto diLine = diLines[i].strip();
         // Normalize.
         if (diLine.startsWith("extern")) diLine = diLine["extern".length + 1 .. $];
-        if (diLine.startsWith("static") || diLine.startsWith("/+") || diLine.length == 0) continue;
+        if (diLine.startsWith("static") || diLine.startsWith("/+") || diLine.length == 0) continue; /++/
         if (diLine.startsWith("auto")) {
             skipBlock(diLines, i);
             continue;
@@ -514,8 +516,8 @@ string[string] defaultTypeMap = [
     "uintmax_t"      : "ulong",
     "wchar_t"        : "int",
     "__u_char"       : "ubyte",
-    "_IO_lock_t"     : "void", // HACK? TODO: Think about it later.
-    "FILE*"          : "void", // HACK? TODO: Think about it later.
+    "_IO_lock_t"     : "void",  // HACK? TODO: Think about it later.
+    "FILE*"          : "void*", // HACK? TODO: Think about it later.
 ];
 
 string[] keywords = [
