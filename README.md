@@ -18,6 +18,7 @@ Options:
   -I=<path>   Header include path
   -P=<prefix> Header prefix(es) (e.g. SDL:KMOD:AUDIO:DUMMY:WindowShapeMode:ShapeMode)
   -S=<name>   Opaque struct(s) to add (e.g. rAudioBuffer:rAudioProcessor)
+  -X=<name>   Exclude type(s) (e.g. Vector2:Vector3:Vector4)
   -E          Remove repeated enums (e.g. alias thing = Enum.thing;)
 ```
 

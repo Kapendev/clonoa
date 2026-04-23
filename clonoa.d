@@ -10,6 +10,22 @@ version (ClonoaLibrary) {
     }
 }
 
+void printHelp(bool canSkipEmptyLine = false) {
+    if (!canSkipEmptyLine) writeln();
+    writeln("Usage: clonoa <compiler> <file.c|file.h> [options]");
+    writeln("Options:");
+    writeln("  -M=<name>   Module name");
+    writeln("  -I=<path>   Header include path");
+    writeln("  -P=<prefix> Header prefix(es) (e.g. SDL:KMOD:AUDIO:DUMMY:WindowShapeMode:ShapeMode)");
+    writeln("  -S=<name>   Opaque struct(s) to add (e.g. rAudioBuffer:rAudioProcessor)");
+    writeln("  -X=<name>   Exclude type(s) (e.g. Vector2:Vector3:Vector4)");
+    writeln("  -E          Remove repeated enums (e.g. alias thing = Enum.thing;)");
+}
+
+void printInvalidOption(string option) {
+    writeln("Invalid option: `", option, '`');
+}
+
 int clonoaMain(string[] cliArgs...) {
     if (cliArgs.length < 3) {
         printHelp(true);
@@ -47,6 +63,9 @@ int clonoaMain(string[] cliArgs...) {
                 break;
             case 'S':
                 foreach (part; value.splitter(':')) clonoaArgs.opaqueStructs ~= part;
+                break;
+            case 'X':
+                foreach (part; value.splitter(':')) clonoaArgs.typeSkipList ~= part;
                 break;
             case 'E':
                 clonoaArgs.removeRepeatedEnums = true;
@@ -260,21 +279,6 @@ void processFunc(ref ClonoaArgs clonoaArgs, ref Array!char output, string line) 
     line = fixFuncLine(line);
     line = safeTypeMapReplace(line, clonoaArgs.typeMap);
     output.echo(line);
-}
-
-void printHelp(bool canSkipEmptyLine = false) {
-    if (!canSkipEmptyLine) writeln();
-    writeln("Usage: clonoa <compiler> <file.c|file.h> [options]");
-    writeln("Options:");
-    writeln("  -M=<name>   Module name");
-    writeln("  -I=<path>   Header include path");
-    writeln("  -P=<prefix> Header prefix(es), can be colon-separated (e.g. SDL:KMOD)");
-    writeln("  -S=<name>   Opaque struct(s) to add, can be colon-separated (e.g. rAudioBuffer:rAudioProcessor)");
-    writeln("  -E          Remove repeated enums (e.g. alias thing = TheEnum.thing;)");
-}
-
-void printInvalidOption(string option) {
-    writeln("Invalid option: `", option, '`');
 }
 
 bool isInSkipList(string name, string[] skipList) {
