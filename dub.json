@@ -1,12 +1,18 @@
 {
-    "authors": [
-        "Alexandros F. G. Kapretsos"
-    ],
-    "copyright": "Copyright © 2026, Alexandros F. G. Kapretsos",
-    "description": "A single-file build system.",
-    "license": "MIT",
     "name": "clonoa",
-    "targetType": "executable",
-    "mainSourceFile": "clonoa.d",
-    "importPaths": ["."]
+    "description": "A tool that generates D bindings from C files using ImportC.",
+    "authors": ["Alexandros F. G. Kapretsos"],
+    "copyright": "Copyright © 2026, Alexandros F. G. Kapretsos",
+    "license": "MIT",
+    "configurations": [
+        {
+            "name": "clonoaExecutable",
+            "targetType": "executable"
+        },
+        {
+            "name": "clonoaLibrary",
+            "targetType": "library",
+            "versions": ["ClonoaLibrary"]
+        }
+    ]
 }

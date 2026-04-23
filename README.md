@@ -1,5 +1,5 @@
 
-# Clonoa (WIP)
+# Clonoa
 
 A tool that generates D bindings from C files using [ImportC](https://dlang.org/spec/importc.html).
 
@@ -7,7 +7,7 @@ A tool that generates D bindings from C files using [ImportC](https://dlang.org/
 
 ## Usage
 
-Clonoa is a single D file: [`clonoa.d`](clonoa.d).
+Clonoa is a single D file: [`clonoa.d`](source/clonoa.d).
 By default, it takes a C file and prints the generated bindings to stdout.
 The CLI follows this structure:
 
@@ -20,6 +20,12 @@ Options:
   -S=<name>   Opaque struct(s) to add (e.g. rAudioBuffer:rAudioProcessor)
   -X=<name>   Exclude type(s) (e.g. Vector2:Vector3:Vector4)
   -E          Remove repeated enums (e.g. alias thing = Enum.thing;)
+```
+
+To run Clonoa from any folder via DUB, use:
+
+```
+dub run clonoa -- <compiler> <file.c> [options]
 ```
 
 ## SIMD Guards
@@ -80,6 +86,7 @@ rdmd -L=-lSDL2 app.d
 ## Library
 
 Clonoa can be used as a library by defining the `ClonoaLibrary` version flag.
+This is defined by default when using Clonoa as a DUB dependency.
 The main entry points are:
 
 ```d
