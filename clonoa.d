@@ -22,7 +22,7 @@ int clonoaMain(string[] cliArgs...) {
     }
 
     auto clonoaArgs = ClonoaArgs();
-    clonoaArgs.useDefaultTypeMapAndSkipLists();
+    clonoaArgs.useDefaults();
     clonoaArgs.compiler = cliArgs[1];
     clonoaArgs.headerPath = cliArgs[2];
     clonoaArgs.moduleName = clonoaArgs.headerPath.baseName.stripExtension().toLower();
@@ -40,18 +40,10 @@ int clonoaMain(string[] cliArgs...) {
                 clonoaArgs.moduleName = value;
                 break;
             case 'I':
-                auto prefix = "-P=-I"; // NOTE: The default compiler is DMD.
-                if (clonoaArgs.compiler.endsWith("ldc2")) prefix = "-P -I";
-                if (clonoaArgs.compiler.endsWith("gdc")) prefix = "-Xpreprocessor -I";
-                clonoaArgs.headerIncludes ~= prefix ~ value;
+                clonoaArgs.appendHeaderInclude(value);
                 break;
             case 'P':
-                foreach (part; value.splitter(':')) {
-                    clonoaArgs.headerPrefixes ~= part;
-                    clonoaArgs.headerPrefixes ~= "_" ~ part;
-                    if (part[0].isUpper) clonoaArgs.headerPrefixes ~= part.toLower();
-                    if (part[0].isLower) clonoaArgs.headerPrefixes ~= part.toUpper();
-                }
+                foreach (part; value.splitter(':')) clonoaArgs.appendHeaderPrefix(part);
                 break;
             case 'S':
                 foreach (part; value.splitter(':')) clonoaArgs.opaqueStructs ~= part;
@@ -196,7 +188,7 @@ void processAlias(ref ClonoaArgs clonoaArgs, ref Array!char output, string line,
         foreach (defined; definedEnumMembers) if (enumMember == defined) return;
         line = line.replace(enumType ~ ".", enumType.escapeKeyword() ~ ".");
         line = line.replace("." ~ enumMember, "." ~ enumMember.escapeKeyword());
-    } else if (value.canFind("function(")) {
+    } else if (line.canFind("function(")) {
         line = fixFuncLine(line);
         line = safeTypeMapReplace(line, clonoaArgs.typeMap);
     } else {
@@ -313,7 +305,7 @@ void skipBlock(string[] lines, ref size_t i) {
 }
 
 string fixVarargsInFuncLineParams(string line) {
-    if (line.canFind("__builtin_va_list") || line.canFind("va_list")) {
+    if (line.canFind("__builtin_va_list") || line.canFind("va_list") || line.canFind("__va_list_tag")) {
         auto lastCommaIndex = line.lastIndexOf(",");
         if (lastCommaIndex != -1) {
             line = line[0 .. lastCommaIndex] ~ ", ...);";
@@ -371,15 +363,9 @@ string[string] mergeMaps(string[string] lhs, string[string] rhs) {
     return result;
 }
 
-void useDefaultTypeMapAndSkipLists(ref ClonoaArgs clonoaArgs) {
-    clonoaArgs.typeMap = defaultTypeMap;
-    clonoaArgs.typeSkipList = defaultTypeSkipList;
-    clonoaArgs.funcSkipList = defaultFuncSkipList;
-    clonoaArgs.lineSkipList = defaultLineSkipList;
-}
-
+enum defaultCompiler           = "ldc2";
 enum defaultModuleSymbolHeader = "extern(C) nothrow @nogc:";
-enum defaultIndentation = "    ";
+enum defaultIndentation        = "    ";
 
 string[] defaultLineSkipList = [];
 
@@ -568,12 +554,13 @@ struct ClonoaResult {
 }
 
 struct ClonoaArgs {
+    string compiler = defaultCompiler;
     string headerPath;
     string moduleName;
     string[] headerIncludes;
     string[] headerPrefixes;
     string[] opaqueStructs;
-    string compiler;
+    bool removeRepeatedEnums;
 
     string moduleSymbolHeader = defaultModuleSymbolHeader;
     string indentation = defaultIndentation;
@@ -581,7 +568,27 @@ struct ClonoaArgs {
     string[] typeSkipList;
     string[] funcSkipList;
     string[] lineSkipList;
-    bool removeRepeatedEnums;
+
+    void useDefaults() {
+        typeMap = defaultTypeMap;
+        typeSkipList = defaultTypeSkipList;
+        funcSkipList = defaultFuncSkipList;
+        lineSkipList = defaultLineSkipList;
+    }
+
+    void appendHeaderInclude(string path) {
+        auto prefix = "-P=-I"; // NOTE: The default is DMD.
+        if (compiler.endsWith("ldc2")) prefix = "-P -I";
+        if (compiler.endsWith("gdc"))  prefix = "-Xpreprocessor -I";
+        headerIncludes ~= prefix ~ path;
+    }
+
+    void appendHeaderPrefix(string prefix) {
+        headerPrefixes ~= prefix;
+        headerPrefixes ~= "_" ~ prefix;
+        if (prefix[0].isUpper) headerPrefixes ~= prefix.toLower();
+        if (prefix[0].isLower) headerPrefixes ~= prefix.toUpper();
+    }
 }
 
 struct BlockLineRange {

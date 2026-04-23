@@ -16,8 +16,8 @@ Usage: clonoa <compiler> <file.c|file.h> [options]
 Options:
   -M=<name>   Module name
   -I=<path>   Header include path
-  -P=<prefix> Header prefix(es), colon-separated (e.g. SDL:KMOD)
-  -S=<name>   Opaque struct(s) to add, colon-separated (e.g. rAudioBuffer:rAudioProcessor)
+  -P=<prefix> Header prefix(es) (e.g. SDL:KMOD:AUDIO:DUMMY:WindowShapeMode:ShapeMode)
+  -S=<name>   Opaque struct(s) to add (e.g. rAudioBuffer:rAudioProcessor)
   -E          Remove repeated enums (e.g. alias thing = Enum.thing;)
 ```
 
@@ -83,7 +83,7 @@ The main entry points are:
 
 ```d
 int clonoaMain(string[] cliArgs...);
-ClonoaResult clonoaRun(ref ClonoaArgs args, ref Array!char output);
+ClonoaResult clonoaRun(ref ClonoaArgs clonoaArgs, ref Array!char output);
 
 struct ClonoaResult {
     int fault;
@@ -92,12 +92,13 @@ struct ClonoaResult {
 }
 
 struct ClonoaArgs {
+    string compiler = defaultCompiler;
     string headerPath;
     string moduleName;
     string[] headerIncludes;
     string[] headerPrefixes;
     string[] opaqueStructs;
-    string compiler;
+    bool removeRepeatedEnums;
 
     string moduleSymbolHeader = defaultModuleSymbolHeader;
     string indentation = defaultIndentation;
@@ -105,6 +106,32 @@ struct ClonoaArgs {
     string[] typeSkipList;
     string[] funcSkipList;
     string[] lineSkipList;
-    bool removeRepeatedEnums;
+
+    void useDefaults() {
+        typeMap = defaultTypeMap;
+        typeSkipList = defaultTypeSkipList;
+        funcSkipList = defaultFuncSkipList;
+        lineSkipList = defaultLineSkipList;
+    }
+
+    void appendHeaderInclude(string path) {
+        auto prefix = "-P=-I"; // NOTE: The default is DMD.
+        if (compiler.endsWith("ldc2")) prefix = "-P -I";
+        if (compiler.endsWith("gdc"))  prefix = "-Xpreprocessor -I";
+        headerIncludes ~= prefix ~ path;
+    }
+
+    void appendHeaderPrefix(string prefix) {
+        headerPrefixes ~= prefix;
+        headerPrefixes ~= "_" ~ prefix;
+        if (prefix[0].isUpper) headerPrefixes ~= prefix.toLower();
+        if (prefix[0].isLower) headerPrefixes ~= prefix.toUpper();
+    }
 }
 ```
+
+## What is a Clonoa?
+
+A play on the words C and Klonoa, with Klonoa being a character from a game.
+
+[![dw](https://media1.tenor.com/m/TjmvhWaDkugAAAAC/klonoa-klonoa-heroes.gif)](https://youtu.be/7zmtw_miD9I)
