@@ -1,7 +1,5 @@
 #!/bin/env rdmd
 
-// NOTE: The type map part needs to ne better. Just replacing randomly is not good lol.
-
 /// A tool that generates D bindings from C files using ImportC.
 module clonoa;
 
@@ -149,6 +147,28 @@ ClonoaResult clonoaRun(ref ClonoaArgs clonoaArgs, ref Array!char output) {
     return ClonoaResult();
 }
 
+// TODO: WAS HERE
+string safeTypeMapReplace(string line, string[string] typeMap) {
+    string result;
+    string token;
+    foreach (c; line) {
+        if (c.isAlphaNum || c == '_') {
+            token ~= c;
+        } else {
+            if (auto target = token in typeMap) {
+                result ~= *target;
+            } else {
+                result ~= token;
+            }
+            token = "";
+            result ~= c;
+        }
+    }
+    if (auto target = token in typeMap) result ~= *target;
+    else result ~= token;
+    return result;
+}
+
 void processAlias(ref ClonoaArgs clonoaArgs, ref Array!char output, string line, string[] definedEnumMembers) {
     // Fix old-style functions: alias void foo(...) -> alias foo = void function(...)
     if (line.canFind("(") && !line.canFind("=")) {
@@ -177,10 +197,10 @@ void processAlias(ref ClonoaArgs clonoaArgs, ref Array!char output, string line,
         line = line.replace(enumType ~ ".", enumType.escapeKeyword() ~ ".");
         line = line.replace("." ~ enumMember, "." ~ enumMember.escapeKeyword());
     } else if (value.canFind("function(")) {
-        foreach (c, d; clonoaArgs.typeMap) line = line.replace(c, d);
         line = fixFuncLine(line);
+        line = safeTypeMapReplace(line, clonoaArgs.typeMap);
     } else {
-        foreach (c, d; clonoaArgs.typeMap) line = line.replace(c, d);
+        line = safeTypeMapReplace(line, clonoaArgs.typeMap);
     }
     output.echo(line);
 }
@@ -201,11 +221,11 @@ void processBlock(ref ClonoaArgs clonoaArgs, ref Array!char output, string[] lin
         }
         if (name.isSkipped(clonoaArgs.typeSkipList, clonoaArgs.headerPrefixes)) return;
 
-        foreach (c, d; clonoaArgs.typeMap) line = line.replace(c, d);
         auto nameIndex = line.indexOf(name);
         if (nameIndex != -1) {
             line = line[0 .. nameIndex] ~ name.escapeKeyword() ~ line[nameIndex + name.length .. $];
         }
+        line = safeTypeMapReplace(line, clonoaArgs.typeMap);
         output.echo(line);
         return;
     }
@@ -218,9 +238,7 @@ void processBlock(ref ClonoaArgs clonoaArgs, ref Array!char output, string[] lin
     foreach (memberLine; BlockLineRange(lines, i)) {
         if (memberLine.length == 0) continue;
         if (memberLine.startsWith("align ")) memberLine = memberLine["align ".length .. $];
-        foreach (c, d; clonoaArgs.typeMap) memberLine = memberLine.replace(c, d); // TODO: YEAH BAD. FIX. Every line like that should be removed really.
         memberLine = memberLine.replace(" = void;", ";");
-
         if (isEnum) {
             auto equalIndex = memberLine.indexOf(" = ");
             auto commaIndex = memberLine.indexOf(",");
@@ -233,6 +251,7 @@ void processBlock(ref ClonoaArgs clonoaArgs, ref Array!char output, string[] lin
             auto escapedName = memberName.escapeKeyword();
             memberLine = memberLine[0 .. $ - memberName.length - 1] ~ escapedName ~ ";";
         }
+        memberLine = safeTypeMapReplace(memberLine, clonoaArgs.typeMap);
         output.echo(clonoaArgs.indentation, memberLine);
     }
     output.echo("}\n");
@@ -246,8 +265,8 @@ void processFunc(ref ClonoaArgs clonoaArgs, ref Array!char output, string line) 
     if (name.isSkipped(clonoaArgs.funcSkipList, clonoaArgs.headerPrefixes)) return;
     foreach (part; parts) if (part.startsWith("__")) return; // Libc leak heuristic.
 
-    foreach (c, d; clonoaArgs.typeMap) line = line.replace(c, d);
     line = fixFuncLine(line);
+    line = safeTypeMapReplace(line, clonoaArgs.typeMap);
     output.echo(line);
 }
 
@@ -364,21 +383,6 @@ enum defaultIndentation = "    ";
 
 string[] defaultLineSkipList = [];
 
-string[] defaultFuncSkipList = [
-    "erf",
-    "erff",
-    "erfl",
-    "erfc",
-    "erfcf",
-    "erfcl",
-    "lgamma",
-    "lgammaf",
-    "lgammal",
-    "tgamma",
-    "tgammaf",
-    "tgammal",
-];
-
 string[] defaultTypeSkipList = [
     "true",
     "false",
@@ -455,6 +459,21 @@ string[] defaultTypeSkipList = [
     "FILE",
 ];
 
+string[] defaultFuncSkipList = [
+    "erf",
+    "erff",
+    "erfl",
+    "erfc",
+    "erfcf",
+    "erfcl",
+    "lgamma",
+    "lgammaf",
+    "lgammal",
+    "tgamma",
+    "tgammaf",
+    "tgammal",
+];
+
 string[string] defaultTypeMap = [
     "__int8_t"       : "byte",
     "__int16_t"      : "short",
@@ -516,8 +535,8 @@ string[string] defaultTypeMap = [
     "uintmax_t"      : "ulong",
     "wchar_t"        : "int",
     "__u_char"       : "ubyte",
-    "_IO_lock_t"     : "void",  // HACK? TODO: Think about it later.
-    "FILE*"          : "void*", // HACK? TODO: Think about it later.
+    "_IO_lock_t"     : "void", // HACK? TODO: Think about it later.
+    "FILE"           : "void", // HACK? TODO: Think about it later.
 ];
 
 string[] keywords = [
@@ -596,7 +615,7 @@ import std.algorithm, std.array, std.container.array;
 import std.stdio, std.process, std.file;
 
 // ---
-// Copyright 2025 Alexandros F. G. Kapretsos
+// Copyright 2026 Alexandros F. G. Kapretsos
 // SPDX-License-Identifier: MIT
 // Email: alexandroskapretsos@gmail.com
 // Project: https://github.com/Kapendev/clonoa
