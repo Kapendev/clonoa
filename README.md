@@ -140,6 +140,6 @@ struct ClonoaArgs {
 
 ## What is a Clonoa?
 
-A play on the words C and Klonoa, with Klonoa being a character from a game.
+It's a play on the names C and Klonoa, with Klonoa being a character from a game.
 
 [![dw](https://media1.tenor.com/m/TjmvhWaDkugAAAAC/klonoa-klonoa-heroes.gif)](https://youtu.be/7zmtw_miD9I)
