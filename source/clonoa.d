@@ -23,6 +23,7 @@ void printHelp(bool canSkipEmptyLine = false) {
     writeln("  -H=<path>   Module symbol header path (e.g. raylib_header.txt)");
     writeln("  -R=<path>   Type map path (e.g. raylib_types.ini)");
     writeln("  -X=<prefix> Exclude prefix from function names (e.g. -X=SDL_ turns SDL_Init to Init)");
+    writeln("  -L          Lowers the first character of function names (e.g. turns InitWindow to initWindow)");
     writeln("  -E          Remove repeated enums (e.g. alias theThing = Enum.theThing;)");
 }
 
@@ -114,6 +115,9 @@ int clonoaMain(string[] cliArgs...) {
                 break;
             case 'X':
                 clonoaArgs.excludePrefix = value;
+                break;
+            case 'L':
+                clonoaArgs.lowerFirstChar = true;
                 break;
             case 'E':
                 clonoaArgs.removeRepeatedEnums = true;
@@ -270,6 +274,7 @@ void processBlock(ref ClonoaArgs clonoaArgs, ref Array!char output, string[] lin
         return;
     }
 
+    output.echo();
     output.echo(keyword, name.length ? " " ~ name.escapeKeyword() : "", " {");
     foreach (memberLine; BlockLineRange(lines, i)) {
         if (memberLine.length == 0) continue;
@@ -303,29 +308,32 @@ void processFunc(ref ClonoaArgs clonoaArgs, ref Array!char output, string line) 
 
     line = fixFuncLine(line);
     line = safeTypeMapReplace(line, clonoaArgs.typeMap);
-    auto dName = name.stripExcludePrefix(clonoaArgs.excludePrefix);
+    auto dName = name.stripExcludePrefix(clonoaArgs.excludePrefix, clonoaArgs.lowerFirstChar);
     if (dName != name) { // Changed name and need to pragma mangle it.
         line = "pragma(mangle, \"" ~ name ~ "\") " ~ line.replace(name ~ "(", dName ~ "(");
     }
     output.echo(line);
 }
 
-string stripExcludePrefix(string name, string excludePrefix) {
-    static immutable badWords = [
-        "main",
-        "assert",
-        "new",
-        "delete",
-        "import",
-        "cast",
-    ];
+string stripExcludePrefix(string name, string excludePrefix, bool lowerFirstChar) {
+    if (name.length <= 1) return name;
 
+    auto result = name;
     if (excludePrefix.length && name.startsWith(excludePrefix)) {
-        auto newName = name[excludePrefix.length .. $];
-        foreach (badWord; badWords) if (newName == badWord) return name;
-        return newName;
+        result = name[excludePrefix.length .. $];
+        if (result.length == 0) {
+            result = name;
+        } else {
+            foreach (keyword; keywords) {
+                if (result == keyword) {
+                    result = name;
+                    break;
+                }
+            }
+        }
     }
-    return name;
+    if (lowerFirstChar && result[0].isUpper && !result.canFind("_")) result = std.ascii.toLower(result[0]) ~ result[1 .. $];
+    return result;
 }
 
 string safeTypeMapReplace(string line, string[string] typeMap) {
@@ -617,6 +625,11 @@ string[] keywords = [
     "alias",
     "debug",
     "is",
+    "main",
+    "assert",
+    "new",
+    "delete",
+    "cast",
 ];
 
 struct ClonoaResult {
@@ -633,6 +646,7 @@ struct ClonoaArgs {
     string[] headerPrefixes;
     string[] opaqueStructs;
     string excludePrefix;
+    bool lowerFirstChar;
     bool removeRepeatedEnums;
 
     string moduleSymbolHeader = defaultModuleSymbolHeader;

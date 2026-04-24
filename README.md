@@ -23,6 +23,7 @@ Options:
   -H=<path>   Module symbol header path (e.g. raylib_header.txt)
   -R=<path>   Type map path (e.g. raylib_types.ini)
   -X=<prefix> Exclude prefix from function names (e.g. -X=SDL_ turns SDL_Init to Init)
+  -L          Lowers the first character of function names (e.g. turns InitWindow to initWindow)
   -E          Remove repeated enums (e.g. alias theThing = Enum.theThing;)
 ```
 
