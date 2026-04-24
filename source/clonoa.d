@@ -22,6 +22,7 @@ void printHelp(bool canSkipEmptyLine = false) {
     writeln("  -F=<name>   Exclude function(s) (e.g. DrawText:DrawTextEx:DrawTextPro:MeasureText)");
     writeln("  -H=<path>   Module symbol header path (e.g. raylib_header.txt)");
     writeln("  -R=<path>   Type map path (e.g. raylib_types.ini)");
+    writeln("  -X=<prefix> Exclude prefix from function names (e.g. -X=SDL_ turns SDL_Init to Init)");
     writeln("  -E          Remove repeated enums (e.g. alias theThing = Enum.theThing;)");
 }
 
@@ -110,6 +111,9 @@ int clonoaMain(string[] cliArgs...) {
                     writeln("Could not read type map: `", value, "`");
                     return 1;
                 }
+                break;
+            case 'X':
+                clonoaArgs.excludePrefix = value;
                 break;
             case 'E':
                 clonoaArgs.removeRepeatedEnums = true;
@@ -299,7 +303,29 @@ void processFunc(ref ClonoaArgs clonoaArgs, ref Array!char output, string line) 
 
     line = fixFuncLine(line);
     line = safeTypeMapReplace(line, clonoaArgs.typeMap);
+    auto dName = name.stripExcludePrefix(clonoaArgs.excludePrefix);
+    if (dName != name) { // Changed name and need to pragma mangle it.
+        line = "pragma(mangle, \"" ~ name ~ "\") " ~ line.replace(name ~ "(", dName ~ "(");
+    }
     output.echo(line);
+}
+
+string stripExcludePrefix(string name, string excludePrefix) {
+    static immutable badWords = [
+        "main",
+        "assert",
+        "new",
+        "delete",
+        "import",
+        "cast",
+    ];
+
+    if (excludePrefix.length && name.startsWith(excludePrefix)) {
+        auto newName = name[excludePrefix.length .. $];
+        foreach (badWord; badWords) if (newName == badWord) return name;
+        return newName;
+    }
+    return name;
 }
 
 string safeTypeMapReplace(string line, string[string] typeMap) {
@@ -606,6 +632,7 @@ struct ClonoaArgs {
     string[] headerIncludes;
     string[] headerPrefixes;
     string[] opaqueStructs;
+    string excludePrefix;
     bool removeRepeatedEnums;
 
     string moduleSymbolHeader = defaultModuleSymbolHeader;

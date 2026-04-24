@@ -22,6 +22,7 @@ Options:
   -F=<name>   Exclude function(s) (e.g. DrawText:DrawTextEx:DrawTextPro:MeasureText)
   -H=<path>   Module symbol header path (e.g. raylib_header.txt)
   -R=<path>   Type map path (e.g. raylib_types.ini)
+  -X=<prefix> Exclude prefix from function names (e.g. -X=SDL_ turns SDL_Init to Init)
   -E          Remove repeated enums (e.g. alias theThing = Enum.theThing;)
 ```
 
@@ -52,7 +53,7 @@ Below is an example using the [`SDL2/SDL.h`](headers/SDL2/SDL.h) header on Linux
 
 ```sh
 # Filtering with prefixes and creating opaque structs that got skipped by ImportC.
-rdmd clonoa.d dmd headers/SDL2/SDL.h \
+rdmd source/clonoa.d dmd headers/SDL2/SDL.h \
   -P=SDL:KMOD:AUDIO:DUMMY:WindowShapeMode:ShapeMode \
   -S=SDL_Window:SDL_Cursor:SDL_BlitMap:_SDL_iconv_t \
   > sdl.d
@@ -84,6 +85,29 @@ Compile and run with:
 
 ```sh
 rdmd -L=-lSDL2 app.d
+```
+
+The `SDL_` prefix can also be removed from functions by passing the `-X=SDL_` flag.
+With that flag enabled, the same code becomes:
+
+```d
+import sdl;
+
+void main() {
+    Init(SDL_INIT_VIDEO);
+    auto running = true;
+    auto window = CreateWindow("Hello", 100, 100, 800, 600, 0);
+    auto renderer = CreateRenderer(window, -1, 0);
+    auto event = SDL_Event();
+    while (running) {
+        while (PollEvent(&event)) if (event.type == SDL_QUIT) running = false;
+        SetRenderDrawColor(renderer, 107, 122, 85, 255);
+        RenderClear(renderer);
+        RenderPresent(renderer);
+    }
+    DestroyWindow(window);
+    Quit();
+}
 ```
 
 ## Library
