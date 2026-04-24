@@ -18,8 +18,11 @@ void printHelp(bool canSkipEmptyLine = false) {
     writeln("  -I=<path>   Header include path");
     writeln("  -P=<prefix> Header prefix(es) (e.g. SDL:KMOD:AUDIO:DUMMY:WindowShapeMode:ShapeMode)");
     writeln("  -S=<name>   Opaque struct(s) to add (e.g. rAudioBuffer:rAudioProcessor)");
-    writeln("  -X=<name>   Exclude type(s) (e.g. Vector2:Vector3:Vector4)");
-    writeln("  -E          Remove repeated enums (e.g. alias thing = Enum.thing;)");
+    writeln("  -T=<name>   Exclude type(s) (e.g. Vector2:Vector3:Vector4)");
+    writeln("  -F=<name>   Exclude function(s) (e.g. DrawText:DrawTextEx:DrawTextPro:MeasureText)");
+    writeln("  -H=<path>   Module symbol header path (e.g. raylib_header.txt)");
+    writeln("  -R=<path>   Type map path (e.g. raylib_types.ini)");
+    writeln("  -E          Remove repeated enums (e.g. alias theThing = Enum.theThing;)");
 }
 
 void printInvalidOption(string option) {
@@ -33,7 +36,6 @@ int clonoaMain(string[] cliArgs...) {
     }
     if (!cliArgs[2].endsWith(".h") && !cliArgs[2].endsWith(".c")) {
         writeln("Error: The second argument must be a `.h` or `.c` file.");
-        printHelp();
         return 1;
     }
 
@@ -64,8 +66,50 @@ int clonoaMain(string[] cliArgs...) {
             case 'S':
                 foreach (part; value.splitter(':')) clonoaArgs.opaqueStructs ~= part;
                 break;
-            case 'X':
+            case 'T':
                 foreach (part; value.splitter(':')) clonoaArgs.typeSkipList ~= part;
+                break;
+            case 'F':
+                foreach (part; value.splitter(':')) clonoaArgs.funcSkipList ~= part;
+                break;
+            case 'H':
+                try {
+                    clonoaArgs.moduleSymbolHeader = readText(value).strip("\n");
+                } catch (Exception e) {
+                    writeln("Could not read module symbol header: `", value, "`");
+                    return 1;
+                }
+                break;
+            case 'R':
+                if (!value.endsWith(".ini")) {
+                    writeln("Error: The value of `-R` must be a `.ini` file.");
+                    return 1;
+                }
+                try {
+                    foreach (lineNumber, line; File(value).byLine().enumerate(1)) {
+                        auto iniKey = "";
+                        auto iniValue = "";
+                        auto partIndex = 0;
+                        if (line.length == 0 || line.startsWith("#") || line.startsWith(";")) continue;
+                        foreach (part; line.splitter('=')) {
+                            if (partIndex == 0) iniKey = cast(string) part.strip();
+                            if (partIndex == 1) iniValue = cast(string) part.strip();
+                            if (partIndex >= 2) {
+                                writeln("Error(", value, ":", lineNumber, "): Invalid line.");
+                                return 1;
+                            }
+                            partIndex += 1;
+                        }
+                        if (partIndex != 2 || iniKey.canFind(' ') || iniValue.canFind(' ')) {
+                            writeln("Error(", value, ":", lineNumber, "): Invalid line.");
+                            return 1;
+                        }
+                        clonoaArgs.typeMap[iniKey] = iniValue;
+                    }
+                } catch (Exception e) {
+                    writeln("Could not read type map: `", value, "`");
+                    return 1;
+                }
                 break;
             case 'E':
                 clonoaArgs.removeRepeatedEnums = true;
@@ -78,7 +122,6 @@ int clonoaMain(string[] cliArgs...) {
     }
     if (!clonoaArgs.headerPath.exists) {
         writeln("Error: The file doesn't exist.");
-        printHelp();
         return 1;
     }
 
@@ -156,28 +199,6 @@ ClonoaResult clonoaRun(ref ClonoaArgs clonoaArgs, ref Array!char output) {
 
     remove(diPath);
     return ClonoaResult();
-}
-
-// TODO: WAS HERE
-string safeTypeMapReplace(string line, string[string] typeMap) {
-    string result;
-    string token;
-    foreach (c; line) {
-        if (c.isAlphaNum || c == '_') {
-            token ~= c;
-        } else {
-            if (auto target = token in typeMap) {
-                result ~= *target;
-            } else {
-                result ~= token;
-            }
-            token = "";
-            result ~= c;
-        }
-    }
-    if (auto target = token in typeMap) result ~= *target;
-    else result ~= token;
-    return result;
 }
 
 void processAlias(ref ClonoaArgs clonoaArgs, ref Array!char output, string line, string[] definedEnumMembers) {
@@ -279,6 +300,27 @@ void processFunc(ref ClonoaArgs clonoaArgs, ref Array!char output, string line) 
     line = fixFuncLine(line);
     line = safeTypeMapReplace(line, clonoaArgs.typeMap);
     output.echo(line);
+}
+
+string safeTypeMapReplace(string line, string[string] typeMap) {
+    string result;
+    string token;
+    foreach (c; line) {
+        if (c.isAlphaNum || c == '_') {
+            token ~= c;
+        } else {
+            if (auto target = token in typeMap) {
+                result ~= *target;
+            } else {
+                result ~= token;
+            }
+            token = "";
+            result ~= c;
+        }
+    }
+    if (auto target = token in typeMap) result ~= *target;
+    else result ~= token;
+    return result;
 }
 
 bool isInSkipList(string name, string[] skipList) {
@@ -622,7 +664,7 @@ struct BlockLineRange {
 }
 
 import std.ascii, std.string, std.path;
-import std.algorithm, std.array, std.container.array;
+import std.algorithm, std.range, std.array, std.container.array;
 import std.stdio, std.process, std.file;
 
 // ---

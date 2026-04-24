@@ -18,14 +18,17 @@ Options:
   -I=<path>   Header include path
   -P=<prefix> Header prefix(es) (e.g. SDL:KMOD:AUDIO:DUMMY:WindowShapeMode:ShapeMode)
   -S=<name>   Opaque struct(s) to add (e.g. rAudioBuffer:rAudioProcessor)
-  -X=<name>   Exclude type(s) (e.g. Vector2:Vector3:Vector4)
-  -E          Remove repeated enums (e.g. alias thing = Enum.thing;)
+  -T=<name>   Exclude type(s) (e.g. Vector2:Vector3:Vector4)
+  -F=<name>   Exclude function(s) (e.g. DrawText:DrawTextEx:DrawTextPro:MeasureText)
+  -H=<path>   Module symbol header path (e.g. raylib_header.txt)
+  -R=<path>   Type map path (e.g. raylib_types.ini)
+  -E          Remove repeated enums (e.g. alias theThing = Enum.theThing;)
 ```
 
 To run Clonoa from any folder via DUB, use:
 
 ```
-dub run clonoa -- <compiler> <file.c> [options]
+dub run clonoa -- <compiler> <file.c|file.h> [options]
 ```
 
 ## SIMD Guards
