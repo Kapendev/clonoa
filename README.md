@@ -133,6 +133,7 @@ struct ClonoaArgs {
     string[] headerIncludes;
     string[] headerPrefixes;
     string[] opaqueStructs;
+    string excludePrefix;
     bool removeRepeatedEnums;
 
     string moduleSymbolHeader = defaultModuleSymbolHeader;
