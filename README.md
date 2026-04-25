@@ -25,6 +25,7 @@ Options:
   -X=<prefix> Exclude prefix from function names (e.g. -X=SDL_ turns SDL_Init to Init)
   -L          Lowers the first character of function names (e.g. turns InitWindow to initWindow)
   -E          Remove repeated enums (e.g. alias theThing = Enum.theThing;)
+  -V          Prints skipped symbols to stderr
 ```
 
 To run Clonoa from any folder via DUB, use:

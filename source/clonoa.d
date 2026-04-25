@@ -22,9 +22,10 @@ void printHelp(bool canSkipEmptyLine = false) {
     writeln("  -F=<name>   Exclude function(s) (e.g. DrawText:DrawTextEx:DrawTextPro:MeasureText)");
     writeln("  -H=<path>   Module symbol header path (e.g. raylib_header.txt)");
     writeln("  -R=<path>   Type map path (e.g. raylib_types.ini)");
-    writeln("  -X=<prefix> Exclude prefix from function names (e.g. -X=SDL_ turns SDL_Init to Init)");
+    writeln("  -X=<prefix> Exclude prefix(es) from function names (e.g. -X=SDL_ turns SDL_Init to Init)");
     writeln("  -L          Lowers the first character of function names (e.g. turns InitWindow to initWindow)");
     writeln("  -E          Remove repeated enums (e.g. alias theThing = Enum.theThing;)");
+    writeln("  -V          Prints skipped symbols to stderr");
 }
 
 void printInvalidOption(string option) {
@@ -114,13 +115,16 @@ int clonoaMain(string[] cliArgs...) {
                 }
                 break;
             case 'X':
-                clonoaArgs.excludePrefix = value;
+                foreach (part; value.splitter(':')) clonoaArgs.excludePrefixes ~= part;
                 break;
             case 'L':
                 clonoaArgs.lowerFirstChar = true;
                 break;
             case 'E':
                 clonoaArgs.removeRepeatedEnums = true;
+                break;
+            case 'V':
+                clonoaArgs.verbose = true;
                 break;
             default:
                 printInvalidOption(option);
@@ -185,23 +189,31 @@ ClonoaResult clonoaRun(ref ClonoaArgs clonoaArgs, ref Array!char output) {
     foreach (name; clonoaArgs.opaqueStructs) output.echo("struct " ~ name ~ ";");
     if (clonoaArgs.opaqueStructs.length) output.echo();
 
+    auto isAfterSingleLine = false;
     for (auto i = diFistLine; i < diLines.length - diLastLineOffset; i += 1) {
         auto diLine = diLines[i].strip();
         // Normalize.
         if (diLine.startsWith("extern")) diLine = diLine["extern".length + 1 .. $];
-        if (diLine.startsWith("static") || diLine.startsWith("/+") || diLine.length == 0) continue; /++/
+        if (diLine.startsWith("static") || diLine.startsWith("/+") || diLine.length == 0) {
+            echoSkip(diLine, clonoaArgs.verbose);
+            continue;
+        }
         if (diLine.startsWith("auto")) {
+            echoSkip(diLine, clonoaArgs.verbose);
             skipBlock(diLines, i);
             continue;
         }
-        foreach (line; clonoaArgs.lineSkipList) if (diLine == line) continue;
+        foreach (line; clonoaArgs.lineSkipList) if (diLine == line) {
+            echoSkip(diLine, clonoaArgs.verbose);
+            continue;
+        }
         // Dispatch.
         if (diLine.startsWith("alias")) {
-            processAlias(clonoaArgs, output, diLine, definedEnumMembers);
+            processAlias(clonoaArgs, output, diLine, definedEnumMembers, isAfterSingleLine);
         } else if (diLine.startsWith("struct") || diLine.startsWith("union") || diLine.startsWith("enum")) {
-            processBlock(clonoaArgs, output, diLines, i, definedEnumMembers, definedStructs);
+            processBlock(clonoaArgs, output, diLines, i, definedEnumMembers, definedStructs, isAfterSingleLine);
         } else {
-            processFunc(clonoaArgs, output, diLine);
+            processFunc(clonoaArgs, output, diLine, isAfterSingleLine);
         }
     }
 
@@ -209,7 +221,8 @@ ClonoaResult clonoaRun(ref ClonoaArgs clonoaArgs, ref Array!char output) {
     return ClonoaResult();
 }
 
-void processAlias(ref ClonoaArgs clonoaArgs, ref Array!char output, string line, string[] definedEnumMembers) {
+void processAlias(ref ClonoaArgs clonoaArgs, ref Array!char output, string line, string[] definedEnumMembers, ref bool isAfterSingleLine) {
+    auto diLine = line; // NOTE: For debugging.
     // Fix old-style functions: alias void foo(...) -> alias foo = void function(...)
     if (line.canFind("(") && !line.canFind("=")) {
         auto parenIndex = line.indexOf("(");
@@ -225,15 +238,24 @@ void processAlias(ref ClonoaArgs clonoaArgs, ref Array!char output, string line,
     auto name = parts[1];
     auto value = parts[3];
 
-    if (name.isSkipped(clonoaArgs.typeSkipList, clonoaArgs.headerPrefixes)) return;
+    if (name.isSkipped(clonoaArgs.typeSkipList, clonoaArgs.headerPrefixes)) {
+        echoSkip(diLine, clonoaArgs.verbose);
+        return;
+    }
     line = line.replace("alias " ~ name, "alias " ~ name.escapeKeyword());
 
     if (value.canFind(".")) {
         auto dotIndex = value.indexOf(".");
         auto enumType = value[0 .. dotIndex];
         auto enumMember = value[dotIndex + 1 .. $ - 1];
-        if (enumType.isSkipped(clonoaArgs.typeSkipList, clonoaArgs.headerPrefixes)) return;
-        foreach (defined; definedEnumMembers) if (enumMember == defined) return;
+        if (enumType.isSkipped(clonoaArgs.typeSkipList, clonoaArgs.headerPrefixes)) {
+            echoSkip(diLine, clonoaArgs.verbose);
+            return;
+        }
+        foreach (defined; definedEnumMembers) if (enumMember == defined) {
+            echoSkip(diLine, clonoaArgs.verbose);
+            return;
+        }
         line = line.replace(enumType ~ ".", enumType.escapeKeyword() ~ ".");
         line = line.replace("." ~ enumMember, "." ~ enumMember.escapeKeyword());
     } else if (line.canFind("function(")) {
@@ -243,9 +265,11 @@ void processAlias(ref ClonoaArgs clonoaArgs, ref Array!char output, string line,
         line = safeTypeMapReplace(line, clonoaArgs.typeMap);
     }
     output.echo(line);
+    isAfterSingleLine = true;
 }
 
-void processBlock(ref ClonoaArgs clonoaArgs, ref Array!char output, string[] lines, ref size_t i, string[] definedEnumMembers, string[] definedStructs) {
+void processBlock(ref ClonoaArgs clonoaArgs, ref Array!char output, string[] lines, ref size_t i, string[] definedEnumMembers, string[] definedStructs, ref bool isAfterSingleLine) {
+    auto diLine = lines[i].strip(); // NOTE: For debugging.
     auto line = lines[i].strip();
     auto parts = line.split();
     auto keyword = parts[0];
@@ -257,9 +281,15 @@ void processBlock(ref ClonoaArgs clonoaArgs, ref Array!char output, string[] lin
 
     if (line.endsWith(";")) {
         if (isStruct) {
-            foreach (defined; definedStructs) if (name == defined) return;
+            foreach (defined; definedStructs) if (name == defined) {
+                echoSkip(diLine, clonoaArgs.verbose);
+                return;
+            }
         }
-        if (name.isSkipped(clonoaArgs.typeSkipList, clonoaArgs.headerPrefixes)) return;
+        if (name.isSkipped(clonoaArgs.typeSkipList, clonoaArgs.headerPrefixes)) {
+            echoSkip(diLine, clonoaArgs.verbose);
+            return;
+        }
 
         auto nameIndex = line.indexOf(name);
         if (nameIndex != -1) {
@@ -267,14 +297,16 @@ void processBlock(ref ClonoaArgs clonoaArgs, ref Array!char output, string[] lin
         }
         line = safeTypeMapReplace(line, clonoaArgs.typeMap);
         output.echo(line);
+        isAfterSingleLine = true;
         return;
     }
     if (name.isSkipped(clonoaArgs.typeSkipList, clonoaArgs.headerPrefixes)) {
+        echoSkip(diLine, clonoaArgs.verbose);
         skipBlock(lines, i);
         return;
     }
 
-    output.echo();
+    if (isAfterSingleLine) output.echo();
     output.echo(keyword, name.length ? " " ~ name.escapeKeyword() : "", " {");
     foreach (memberLine; BlockLineRange(lines, i)) {
         if (memberLine.length == 0) continue;
@@ -296,42 +328,54 @@ void processBlock(ref ClonoaArgs clonoaArgs, ref Array!char output, string[] lin
         output.echo(clonoaArgs.indentation, memberLine);
     }
     output.echo("}\n");
+    isAfterSingleLine = false;
 }
 
-void processFunc(ref ClonoaArgs clonoaArgs, ref Array!char output, string line) {
+void processFunc(ref ClonoaArgs clonoaArgs, ref Array!char output, string line, ref bool isAfterSingleLine) {
+    auto diLine = line; // NOTE: For debugging.
     auto parts = line.split();
     auto parenIndex = parts.length > 1 ? parts[1].indexOf("(") : -1;
     auto name = parenIndex != -1 ? parts[1][0 .. parenIndex] : "";
 
-    if (name.isSkipped(clonoaArgs.funcSkipList, clonoaArgs.headerPrefixes)) return;
-    foreach (part; parts) if (part.startsWith("__")) return; // Libc leak heuristic.
+    if (name.isSkipped(clonoaArgs.funcSkipList, clonoaArgs.headerPrefixes)) {
+        echoSkip(diLine, clonoaArgs.verbose);
+        return;
+    }
+    foreach (part; parts) if (part.startsWith("__")) {
+        echoSkip(diLine, clonoaArgs.verbose);
+        return; // Libc leak heuristic.
+    }
 
     line = fixFuncLine(line);
     line = safeTypeMapReplace(line, clonoaArgs.typeMap);
-    auto dName = name.stripExcludePrefix(clonoaArgs.excludePrefix, clonoaArgs.lowerFirstChar);
+    auto dName = name.stripExcludePrefix(clonoaArgs.excludePrefixes, clonoaArgs.lowerFirstChar);
     if (dName != name) { // Changed name and need to pragma mangle it.
         line = "pragma(mangle, \"" ~ name ~ "\") " ~ line.replace(name ~ "(", dName ~ "(");
     }
     output.echo(line);
+    isAfterSingleLine = true;
 }
 
-string stripExcludePrefix(string name, string excludePrefix, bool lowerFirstChar) {
+string stripExcludePrefix(string name, string[] excludePrefixes, bool lowerFirstChar) {
     if (name.length <= 1) return name;
 
     auto result = name;
-    if (excludePrefix.length && name.startsWith(excludePrefix)) {
+    prefixLoop: foreach (excludePrefix; excludePrefixes) {
+        auto canStrip = excludePrefix.length && name.startsWith(excludePrefix);
+        if (!canStrip) continue;
         result = name[excludePrefix.length .. $];
         if (result.length == 0) {
             result = name;
-        } else {
-            foreach (keyword; keywords) {
-                if (result == keyword) {
-                    result = name;
-                    break;
-                }
+            break prefixLoop;
+        }
+        foreach (keyword; keywords) {
+            if (result == keyword) {
+                result = name;
+                break prefixLoop;
             }
         }
     }
+
     if (lowerFirstChar && result[0].isUpper && !result.canFind("_")) result = std.ascii.toLower(result[0]) ~ result[1 .. $];
     return result;
 }
@@ -437,6 +481,10 @@ void echo(ref Array!char output, const(char)[][] args...) {
     output.echon("\n");
 }
 
+void echoSkip(const(char)[] line, bool verbose) {
+    if (verbose) stderr.writeln("Skipped: ", line);
+}
+
 string[string] mergeMaps(string[string] lhs, string[string] rhs) {
     auto result = lhs.dup;
     foreach (k, v; rhs) result[k] = v;
@@ -450,8 +498,6 @@ enum defaultIndentation        = "    ";
 string[] defaultLineSkipList = [];
 
 string[] defaultTypeSkipList = [
-    "true",
-    "false",
     "__int8_t",
     "__int16_t",
     "__int32_t",
@@ -523,6 +569,9 @@ string[] defaultTypeSkipList = [
     "max_align_t",
     "_IO_lock_t",
     "FILE",
+    "PI",
+    "true",
+    "false",
 ];
 
 string[] defaultFuncSkipList = [
@@ -645,9 +694,10 @@ struct ClonoaArgs {
     string[] headerIncludes;
     string[] headerPrefixes;
     string[] opaqueStructs;
-    string excludePrefix;
+    string[] excludePrefixes;
     bool lowerFirstChar;
     bool removeRepeatedEnums;
+    bool verbose;
 
     string moduleSymbolHeader = defaultModuleSymbolHeader;
     string indentation = defaultIndentation;
