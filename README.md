@@ -150,7 +150,7 @@ rdmd -L=-lSDL2 app.d
 ```
 
 The `SDL_` prefix can be removed from functions by passing the `-X=SDL_` flag.
-With that flag enabled, the same code becomes:
+With this enabled, the code becomes:
 
 ```d
 import sdl;
@@ -206,8 +206,8 @@ Compile and run with:
 rdmd -L=-lraylib -L=-lX11 app.d
 ```
 
-The upper case prefix can be changed for functions by passing the `-L` flag.
-With that flag enabled, the same code becomes:
+The PascalCase can be changed to camelCase for function names by passing the `-L` flag.
+With this enabled, the code becomes:
 
 ```d
 import raylib;
