@@ -23,9 +23,9 @@ void printHelp(bool canSkipEmptyLine = false) {
     writeln("  -H=<path>   Module symbol header path (e.g. raylib_header.txt)");
     writeln("  -R=<path>   Type map path (e.g. raylib_types.ini)");
     writeln("  -X=<prefix> Exclude prefix(es) from function names (e.g. -X=SDL_ turns SDL_Init to Init)");
-    writeln("  -L          Lowers the first character of function names (e.g. turns InitWindow to initWindow)");
+    writeln("  -L          Lower the first character of function names (e.g. turns InitWindow to initWindow)");
     writeln("  -E          Remove repeated enums (e.g. alias theThing = Enum.theThing;)");
-    writeln("  -V          Prints skipped symbols to stderr");
+    writeln("  -V          Print skipped symbols to stderr");
 }
 
 void printInvalidOption(string option) {

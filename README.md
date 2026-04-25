@@ -22,10 +22,10 @@ Options:
   -F=<name>   Exclude function(s) (e.g. DrawText:DrawTextEx:DrawTextPro:MeasureText)
   -H=<path>   Module symbol header path (e.g. raylib_header.txt)
   -R=<path>   Type map path (e.g. raylib_types.ini)
-  -X=<prefix> Exclude prefix from function names (e.g. -X=SDL_ turns SDL_Init to Init)
-  -L          Lowers the first character of function names (e.g. turns InitWindow to initWindow)
+  -X=<prefix> Exclude prefix(es) from function names (e.g. -X=SDL_ turns SDL_Init to Init)
+  -L          Lower the first character of function names (e.g. turns InitWindow to initWindow)
   -E          Remove repeated enums (e.g. alias theThing = Enum.theThing;)
-  -V          Prints skipped symbols to stderr
+  -V          Print skipped symbols to stderr
 ```
 
 To run Clonoa from any folder via DUB, use:
