@@ -49,69 +49,6 @@ The [included header](clonoa_simd_guards.h) and an example of an [`__IMPORTC__`]
 Note that some files may also need additional stub definitions for missing builtins.
 They can be added inside the `__IMPORTC__` block manually as needed.
 
-## Example
-
-Below is an example using the [`SDL2/SDL.h`](headers/SDL2/SDL.h) header on Linux:
-
-```sh
-# Filtering with prefixes and creating opaque structs that got skipped by ImportC.
-rdmd source/clonoa.d dmd headers/SDL2/SDL.h \
-  -P=SDL:KMOD:AUDIO:DUMMY:WindowShapeMode:ShapeMode \
-  -S=SDL_Window:SDL_Cursor:SDL_BlitMap:_SDL_iconv_t \
-  > sdl.d
-```
-
-To test the bindings, create an `app.d` file in the same folder:
-
-```d
-import sdl;
-
-void main() {
-    SDL_Init(SDL_INIT_VIDEO);
-    auto running = true;
-    auto window = SDL_CreateWindow("Hello", 100, 100, 800, 600, 0);
-    auto renderer = SDL_CreateRenderer(window, -1, 0);
-    auto event = SDL_Event();
-    while (running) {
-        while (SDL_PollEvent(&event)) if (event.type == SDL_QUIT) running = false;
-        SDL_SetRenderDrawColor(renderer, 107, 122, 85, 255);
-        SDL_RenderClear(renderer);
-        SDL_RenderPresent(renderer);
-    }
-    SDL_DestroyWindow(window);
-    SDL_Quit();
-}
-```
-
-Compile and run with:
-
-```sh
-rdmd -L=-lSDL2 app.d
-```
-
-The `SDL_` prefix can also be removed from functions by passing the `-X=SDL_` flag.
-With that flag enabled, the same code becomes:
-
-```d
-import sdl;
-
-void main() {
-    Init(SDL_INIT_VIDEO);
-    auto running = true;
-    auto window = CreateWindow("Hello", 100, 100, 800, 600, 0);
-    auto renderer = CreateRenderer(window, -1, 0);
-    auto event = SDL_Event();
-    while (running) {
-        while (PollEvent(&event)) if (event.type == SDL_QUIT) running = false;
-        SetRenderDrawColor(renderer, 107, 122, 85, 255);
-        RenderClear(renderer);
-        RenderPresent(renderer);
-    }
-    DestroyWindow(window);
-    Quit();
-}
-```
-
 ## Library
 
 Clonoa can be used as a library by defining the `ClonoaLibrary` version flag.
@@ -167,6 +104,123 @@ struct ClonoaArgs {
         if (prefix[0].isUpper) headerPrefixes ~= prefix.toLower();
         if (prefix[0].isLower) headerPrefixes ~= prefix.toUpper();
     }
+}
+```
+
+## Examples
+
+### SDL2
+
+Below is an example using the [`SDL2/SDL.h`](headers/SDL2/SDL.h) header (that needs an `__IMPORTC__` block) on Linux:
+
+```sh
+# Filtering with prefixes and creating opaque structs that got skipped by ImportC.
+rdmd source/clonoa.d dmd headers/SDL2/SDL.h \
+  -P=SDL:KMOD:AUDIO:DUMMY:WindowShapeMode:ShapeMode \
+  -S=SDL_Window:SDL_Cursor:SDL_BlitMap:_SDL_iconv_t \
+  > sdl.d
+```
+
+To test the bindings, create an `app.d` file in the same folder:
+
+```d
+import sdl;
+
+void main() {
+    SDL_Init(SDL_INIT_VIDEO);
+    auto running = true;
+    auto window = SDL_CreateWindow("D + SDL", 100, 100, 800, 600, 0);
+    auto renderer = SDL_CreateRenderer(window, -1, 0);
+    auto event = SDL_Event();
+    while (running) {
+        while (SDL_PollEvent(&event)) if (event.type == SDL_QUIT) running = false;
+        SDL_SetRenderDrawColor(renderer, 107, 122, 85, 255);
+        SDL_RenderClear(renderer);
+        SDL_RenderPresent(renderer);
+    }
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+}
+```
+
+Compile and run with:
+
+```sh
+rdmd -L=-lSDL2 app.d
+```
+
+The `SDL_` prefix can be removed from functions by passing the `-X=SDL_` flag.
+With that flag enabled, the same code becomes:
+
+```d
+import sdl;
+
+void main() {
+    Init(SDL_INIT_VIDEO);
+    auto running = true;
+    auto window = CreateWindow("D + SDL", 100, 100, 800, 600, 0);
+    auto renderer = CreateRenderer(window, -1, 0);
+    auto event = SDL_Event();
+    while (running) {
+        while (PollEvent(&event)) if (event.type == SDL_QUIT) running = false;
+        SetRenderDrawColor(renderer, 107, 122, 85, 255);
+        RenderClear(renderer);
+        RenderPresent(renderer);
+    }
+    DestroyWindow(window);
+    Quit();
+}
+```
+
+### raylib
+
+Below is an example using the [`raylib.h`](headers/raylib.h) header on Linux:
+
+```sh
+# Creating opaque structs that got skipped by ImportC.
+rdmd source/clonoa.d dmd headers/raylib.h \
+    -S=rAudioBuffer:rAudioProcessor \
+    > raylib.d
+```
+
+To test the bindings, create an `app.d` file in the same folder:
+
+```d
+import raylib;
+
+void main() {
+    InitWindow(800, 450, "D + raylib");
+    while (!WindowShouldClose) {
+        BeginDrawing();
+        ClearBackground(Color(40, 40, 40, 255));
+        DrawText("Hello, World!", 16, 16, 20, Color(200, 200, 200, 255));
+        EndDrawing();
+    }
+    CloseWindow();
+}
+```
+
+Compile and run with:
+
+```sh
+rdmd -L=-lraylib -L=-lX11 app.d
+```
+
+The upper case prefix can be changed for functions by passing the `-L` flag.
+With that flag enabled, the same code becomes:
+
+```d
+import raylib;
+
+void main() {
+    initWindow(800, 450, "D + raylib");
+    while (!windowShouldClose) {
+        beginDrawing();
+        clearBackground(Color(40, 40, 40, 255));
+        drawText("Hello, World!", 16, 16, 20, Color(200, 200, 200, 255));
+        endDrawing();
+    }
+    closeWindow();
 }
 ```
 
