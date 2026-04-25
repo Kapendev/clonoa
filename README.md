@@ -135,8 +135,10 @@ struct ClonoaArgs {
     string[] headerIncludes;
     string[] headerPrefixes;
     string[] opaqueStructs;
-    string excludePrefix;
+    string[] excludePrefixes;
+    bool lowerFirstChar;
     bool removeRepeatedEnums;
+    bool verbose;
 
     string moduleSymbolHeader = defaultModuleSymbolHeader;
     string indentation = defaultIndentation;
