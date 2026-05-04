@@ -113,7 +113,7 @@ struct ClonoaArgs {
 
 ### Hello
 
-Below is an example using the [`hello.c`](hello.c) file on Linux:
+Below is an example using the [`hello.c`](headers/hello.c) file on Linux:
 
 ```sh
 rdmd source/clonoa.d dmd headers/hello.c
