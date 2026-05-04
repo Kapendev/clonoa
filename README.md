@@ -34,6 +34,8 @@ To run Clonoa from any folder via DUB, use:
 dub run clonoa -- <compiler> <file.c|file.h> [options]
 ```
 
+Clonoa examples are in the [examples section](#examples) of this README.
+
 ## SIMD Guards
 
 Some files fail to parse with ImportC due to unsupported SIMD symbols.
@@ -108,6 +110,38 @@ struct ClonoaArgs {
 ```
 
 ## Examples
+
+### Hello
+
+Below is an example using the [`hello.c`](hello.c) file on Linux:
+
+```sh
+rdmd source/clonoa.d dmd headers/hello.c
+```
+
+This will print:
+
+```c
+module hello;
+
+extern(C) nothrow @nogc:
+
+struct debug_ {
+    int debug_;
+}
+
+enum Foo {
+    FOO_1,
+    FOO_2,
+    function_,
+}
+
+alias FOO_1 = Foo.FOO_1;
+alias FOO_2 = Foo.FOO_2;
+alias function_ = Foo.function_;
+int foo1();
+long foo2();
+```
 
 ### SDL2
 
